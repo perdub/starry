@@ -75,17 +75,54 @@ public sealed class InternalDnsServer : IAsyncDisposable
         }
 
         var (domain, qtype) = ParseQuestion(queryBuffer, 12);
-        if (string.IsNullOrEmpty(domain) || qtype != 1) // 1 = A record
+        if (string.IsNullOrEmpty(domain))
         {
             return null;
         }
 
         if (!_records.TryGetValue(domain, out var ip) || ip.AddressFamily != AddressFamily.InterNetwork)
         {
-            return null;
+            return BuildNxDomainResponse(queryBuffer);
+        }
+
+        if (qtype != 1) // 1 = A record. For AAAA (28) or others, return immediate NOERROR with 0 answers
+        {
+            return BuildEmptyNoErrorResponse(queryBuffer);
         }
 
         return BuildDnsResponse(queryBuffer, ip);
+    }
+
+    private static byte[] BuildNxDomainResponse(byte[] queryBuffer)
+    {
+        var response = new byte[queryBuffer.Length];
+        Array.Copy(queryBuffer, response, queryBuffer.Length);
+
+        // Flags: Standard response, Name Error / NXDOMAIN (0x8183)
+        response[2] = 0x81;
+        response[3] = 0x83;
+
+        // Answer count: 0
+        response[6] = 0x00;
+        response[7] = 0x00;
+
+        return response;
+    }
+
+    private static byte[] BuildEmptyNoErrorResponse(byte[] queryBuffer)
+    {
+        var response = new byte[queryBuffer.Length];
+        Array.Copy(queryBuffer, response, queryBuffer.Length);
+
+        // Flags: Standard response, No error (0x8180)
+        response[2] = 0x81;
+        response[3] = 0x80;
+
+        // Answer count: 0
+        response[6] = 0x00;
+        response[7] = 0x00;
+
+        return response;
     }
 
     private static (string Domain, ushort QType) ParseQuestion(byte[] buffer, int offset)

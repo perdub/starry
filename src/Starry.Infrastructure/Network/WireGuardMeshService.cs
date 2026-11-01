@@ -58,7 +58,10 @@ public static class WireGuardMeshService
 
                 if (!string.IsNullOrEmpty(peerNode.Endpoint) && peerNode.IsPublic)
                 {
-                    sb.AppendLine(CultureInfo.InvariantCulture, $"Endpoint = {peerNode.Endpoint}:{peerNode.ListenPort}");
+                    var ep = peerNode.Endpoint.Contains(':', StringComparison.Ordinal)
+                ? peerNode.Endpoint
+                : $"{peerNode.Endpoint}:{peerNode.ListenPort}";
+            sb.AppendLine(CultureInfo.InvariantCulture, $"Endpoint = {ep}");
                 }
 
                 sb.AppendLine(CultureInfo.InvariantCulture, $"PersistentKeepalive = {DefaultKeepalive}");

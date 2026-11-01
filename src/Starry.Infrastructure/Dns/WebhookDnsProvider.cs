@@ -1,11 +1,10 @@
-using System.Net.Http.Json;
 using System.Text.Json.Nodes;
 using Starry.Core.Dns;
 
 namespace Starry.Infrastructure.Dns;
 
 /// <summary>
-/// Webhook-based DNS provider dispatching HTTP POST events on DNS record upsert and delete.
+/// Webhook-based DNS provider dispatching HTTP POST events on DNS record upsert and delete with retry.
 /// </summary>
 public sealed class WebhookDnsProvider : IDnsProvider
 {
@@ -46,8 +45,7 @@ public sealed class WebhookDnsProvider : IDnsProvider
             }
         };
 
-        using var content = new StringContent(payload.ToJsonString(), System.Text.Encoding.UTF8, "application/json");
-        using var response = await _httpClient.PostAsync(_webhookUri, content, ct).ConfigureAwait(false);
+        using var response = await SendWithRetryAsync(payload.ToJsonString(), ct).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
     }
 
@@ -63,8 +61,35 @@ public sealed class WebhookDnsProvider : IDnsProvider
             ["recordId"] = recordId
         };
 
-        using var content = new StringContent(payload.ToJsonString(), System.Text.Encoding.UTF8, "application/json");
-        using var response = await _httpClient.PostAsync(_webhookUri, content, ct).ConfigureAwait(false);
+        using var response = await SendWithRetryAsync(payload.ToJsonString(), ct).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
+    }
+
+    private async Task<HttpResponseMessage> SendWithRetryAsync(string jsonPayload, CancellationToken ct)
+    {
+        var delays = new[] { 100, 300, 700 };
+
+        for (var attempt = 0; attempt <= delays.Length; attempt++)
+        {
+            var content = new StringContent(jsonPayload, System.Text.Encoding.UTF8, "application/json");
+            try
+            {
+                var response = await _httpClient.PostAsync(_webhookUri, content, ct).ConfigureAwait(false);
+                var code = (int)response.StatusCode;
+                if (code is not (429 or 502 or 503 or 504) || attempt == delays.Length)
+                {
+                    return response;
+                }
+
+                response.Dispose();
+                await Task.Delay(delays[attempt], ct).ConfigureAwait(false);
+            }
+            catch (HttpRequestException) when (attempt < delays.Length)
+            {
+                await Task.Delay(delays[attempt], ct).ConfigureAwait(false);
+            }
+        }
+
+        throw new HttpRequestException("Webhook request failed after retries.");
     }
 }

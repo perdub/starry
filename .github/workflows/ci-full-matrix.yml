@@ -93,3 +93,47 @@ jobs:
           /usr/local/bin/starry --version
           /usr/local/bin/starry config schema > /dev/null
           /usr/local/bin/starry plan || true
+
+  live-cluster-matrix:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Run Shard 1 (Scenarios 1-6: 2-3 Node Clusters)
+        if: matrix.shard == 1
+        run: |
+          for i in $(seq 1 6); do
+            ./scripts/run-cluster-scenario.sh $i
+          done
+
+      - name: Run Shard 2 (Scenarios 7-12: 4-5 Node Multi-Tier & Kessoku Fleet)
+        if: matrix.shard == 2
+        run: |
+          for i in $(seq 7 12); do
+            ./scripts/run-cluster-scenario.sh $i
+          done
+
+      - name: Run Shard 3 (Scenarios 13-18: Live Chaos Engineering & Disruption)
+        if: matrix.shard == 3
+        run: |
+          for i in $(seq 13 18); do
+            ./scripts/run-cluster-scenario.sh $i
+          done
+
+      - name: Run Shard 4 (Scenarios 19-24: Brownfield Adoption & Zero-Downtime Attach)
+        if: matrix.shard == 4
+        run: |
+          for i in $(seq 19 24); do
+            ./scripts/run-cluster-scenario.sh $i
+          done

@@ -44,4 +44,20 @@ public class WireGuardMeshTests
         // Nijika config should NOT have Endpoint for non-public ryo node:
         Assert.DoesNotContain("Endpoint = null", nijikaConf, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void GenerateMeshConfigurations_DoesNotDuplicatePort_WhenEndpointAlreadyHasPort()
+    {
+        var nodes = new List<WireGuardNodeConfig>
+        {
+            new("bocchi", "10.99.0.1", "privKey1", "pubKey1", 51820, "203.0.113.1:51820", IsPublic: true),
+            new("nijika", "10.99.0.2", "privKey2", "pubKey2", 51820, null, IsPublic: false)
+        };
+
+        var configs = WireGuardMeshService.GenerateMeshConfigurations(nodes);
+        var nijikaConf = configs["nijika"];
+
+        Assert.Contains("Endpoint = 203.0.113.1:51820", nijikaConf, StringComparison.Ordinal);
+        Assert.DoesNotContain(":51820:51820", nijikaConf, StringComparison.Ordinal);
+    }
 }

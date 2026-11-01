@@ -134,28 +134,50 @@ starry rotate-keys [--dry-run]
 
 ---
 
-## 6. Демон агента (`starry agent`)
+## 7. Захват существующих серверов (`starry adopt`)
 
-### `starry agent run`
+### `starry adopt`
 
-Запуск агента узла в текущем терминале.
+Подключается к работающему VPS по SSH, инспектирует запущенные контейнеры (Docker/Podman), выкачивает конфигурационные файлы (`--pull-files`), находит и шифрует секреты в `Env`, и генерирует готовую модульную структуру конфигурации Starry:
 
 ```bash
-starry agent run [--config /etc/starry/agent.yaml]
+starry adopt root@203.0.113.10:22 --pull-files --out-dir ./config --format yaml
 ```
 
-### `starry agent install-service`
+### `starry unmanaged list`
 
-Создает и регистрирует unit-файл `systemd` (`starry-agent.service`) в операционной системе.
+Опрашивает все подключенные ноды кластера и выводит список контейнеров, запущенных вручную и не находящихся под управлением Starry GitOps:
 
 ```bash
-sudo starry agent install-service
+starry unmanaged list [--config ./config]
 ```
 
-### `starry agent status`
+---
 
-Проверяет состояние локального агента, соединение с соседями по WireGuard и статус локальных контейнеров.
+## 8. Аварийное восстановление и тома
+
+### `starry volume open`
+
+Подключается к ноде и отображает структуру файлов тома или каталога данных:
 
 ```bash
-starry agent status
+starry volume open bocchi /var/data/postgres [--once]
+```
+
+### `starry bundle export`
+
+Выгружает всю конфигурацию кластера, зашифрованные секреты и метаданные в единый переносимый архив аварийного восстановления:
+
+```bash
+starry bundle export -o cluster-backup.tar.gz
+```
+
+### `starry bundle import`
+
+Восстанавливает архив кластера с возможностью переназначения IP-адресов нод на новые серверы:
+
+```bash
+starry bundle import cluster-backup.tar.gz -o ./new-cluster \
+  --override-ip bocchi=198.51.100.99 \
+  --override-ip nijika=198.51.100.100
 ```

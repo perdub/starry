@@ -159,3 +159,53 @@ Inspects local agent health, mesh peer latency, and local container statuses.
 ```bash
 starry agent status
 ```
+
+---
+
+## 7. Brownfield Host Adoption (`starry adopt`)
+
+### `starry adopt`
+
+Inspects an existing server over SSH, discovers running containers (Docker/Podman), downloads bind-mounted configuration files (`--pull-files`), scans and encrypts secrets in `Env`, and generates modular Starry configurations:
+
+```bash
+starry adopt root@203.0.113.10:22 --pull-files --out-dir ./config --format yaml
+```
+
+### `starry unmanaged list`
+
+Scans cluster nodes and lists all unmanaged / manually started containers not tracked in Starry GitOps:
+
+```bash
+starry unmanaged list [--config ./config]
+```
+
+---
+
+## 8. Disaster Recovery & Volumes
+
+### `starry volume open`
+
+Connects to a node and displays the file listing of a container volume or directory:
+
+```bash
+starry volume open bocchi /var/data/postgres [--once]
+```
+
+### `starry bundle export`
+
+Exports the entire cluster configuration, encrypted secrets, and metadata into a single disaster recovery capsule:
+
+```bash
+starry bundle export -o cluster-backup.tar.gz
+```
+
+### `starry bundle import`
+
+Restores a cluster capsule with optional IP address overrides for new host instances:
+
+```bash
+starry bundle import cluster-backup.tar.gz -o ./new-cluster \
+  --override-ip bocchi=198.51.100.99 \
+  --override-ip nijika=198.51.100.100
+```

@@ -2,8 +2,9 @@ import { defineConfig } from 'vitepress'
 
 export default defineConfig({
   title: 'Starry',
+  base: '/starry/',
   head: [
-    ['link', { rel: 'icon', type: 'image/svg+xml', href: '/logo.svg' }],
+    ['link', { rel: 'icon', type: 'image/svg+xml', href: '/starry/logo.svg' }],
     ['meta', { name: 'theme-color', content: '#f59e0b' }]
   ],
   locales: {

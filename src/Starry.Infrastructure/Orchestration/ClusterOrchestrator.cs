@@ -365,7 +365,7 @@ public sealed partial class ClusterOrchestrator
         var serviceObj = config.Root["services"]?[serviceName] as JsonObject
             ?? throw new InvalidOperationException($"Service '{serviceName}' was not found in configuration.");
 
-        var spec = BuildServiceSpec(serviceName, serviceObj);
+        var spec = BuildServiceSpec(serviceName, serviceObj, config);
 
         var targetNodeName = serviceObj["node"]?.ToString();
         INodeConnection? targetNode = null;
@@ -402,7 +402,7 @@ public sealed partial class ClusterOrchestrator
         var serviceObj = config.Root["services"]?[serviceName] as JsonObject
             ?? throw new InvalidOperationException($"Service '{serviceName}' was not found in configuration.");
 
-        var spec = BuildServiceSpec(serviceName, serviceObj);
+        var spec = BuildServiceSpec(serviceName, serviceObj, config);
         var targetNodeName = serviceObj["node"]?.ToString()
             ?? throw new InvalidOperationException($"Target node for Blue-Green migration of service '{serviceName}' is unspecified.");
 
@@ -469,7 +469,67 @@ public sealed partial class ClusterOrchestrator
         await dnsProvider.UpsertRecordAsync(zoneDomain, record, ct).ConfigureAwait(false);
     }
 
-    private ServiceSpec BuildServiceSpec(string serviceName, JsonObject serviceObj)
+    [GeneratedRegex(@"\{\{\s*(?<key>[a-zA-Z0-9_\.]+)\s*\}\}", RegexOptions.None, matchTimeoutMilliseconds: 1000)]
+    private static partial Regex TemplateTagRegex();
+
+    [GeneratedRegex(@"ENC\[AES256_GCM:v1:[^\]]+\]", RegexOptions.None, matchTimeoutMilliseconds: 1000)]
+    private static partial Regex EncryptedSecretTokenRegex();
+
+    public string RenderTemplateAndDecryptInlineSecrets(string content, ConfigTree config)
+    {
+        if (string.IsNullOrEmpty(content))
+        {
+            return content;
+        }
+
+        var rendered = TemplateTagRegex().Replace(content, match =>
+        {
+            var key = match.Groups["key"].Value.Trim();
+            var node = config.FindNode(key);
+            if (node != null)
+            {
+                return node.ToString();
+            }
+
+            var parts = key.Split('.');
+            if (parts.Length == 3 && string.Equals(parts[0], "services", StringComparison.OrdinalIgnoreCase) && string.Equals(parts[2], "vip", StringComparison.OrdinalIgnoreCase))
+            {
+                var svc = config.Root["services"]?[parts[1]] as JsonObject;
+                return svc?["vip"]?.ToString() ?? svc?["vip_address"]?.ToString() ?? match.Value;
+            }
+            if (parts.Length == 3 && string.Equals(parts[0], "nodes", StringComparison.OrdinalIgnoreCase) && string.Equals(parts[2], "vpn_ip", StringComparison.OrdinalIgnoreCase))
+            {
+                var n = config.Root["nodes"]?[parts[1]] as JsonObject;
+                return n?["vpn_ip"]?.ToString() ?? match.Value;
+            }
+
+            return match.Value;
+        });
+
+        if (_masterKey != null)
+        {
+            rendered = EncryptedSecretTokenRegex().Replace(rendered, match =>
+            {
+                if (_cryptoService.TryParseEncrypted(match.Value, out var envelope) && envelope != null)
+                {
+                    try
+                    {
+                        var bytes = _cryptoService.Decrypt(envelope, _masterKey, string.Empty);
+                        return Encoding.UTF8.GetString(bytes);
+                    }
+                    catch (CryptographicException)
+                    {
+                        return match.Value;
+                    }
+                }
+                return match.Value;
+            });
+        }
+
+        return rendered;
+    }
+
+    private ServiceSpec BuildServiceSpec(string serviceName, JsonObject serviceObj, ConfigTree? config = null)
     {
         var image = serviceObj["image"]?.ToString()
             ?? throw new InvalidOperationException($"Service '{serviceName}' is missing required 'image' property.");
@@ -494,8 +554,8 @@ public sealed partial class ClusterOrchestrator
             Ports = ExtractStringList(serviceObj, "ports"),
             Volumes = ExtractStringList(serviceObj, "volumes"),
             Labels = ExtractStringDictionary(serviceObj, "labels"),
-            Environment = ExtractServiceEnvironment(serviceName, serviceObj),
-            Files = ExtractServiceFiles(serviceName, serviceObj)
+            Environment = ExtractServiceEnvironment(serviceName, serviceObj, config),
+            Files = ExtractServiceFiles(serviceName, serviceObj, config)
         };
     }
 
@@ -528,7 +588,7 @@ public sealed partial class ClusterOrchestrator
         return result;
     }
 
-    private Dictionary<string, string> ExtractServiceEnvironment(string serviceName, JsonObject serviceObj)
+    private Dictionary<string, string> ExtractServiceEnvironment(string serviceName, JsonObject serviceObj, ConfigTree? config = null)
     {
         var result = new Dictionary<string, string>(StringComparer.Ordinal);
         var envProperty = serviceObj["env"] as JsonObject ?? serviceObj["environment"] as JsonObject;
@@ -540,6 +600,10 @@ public sealed partial class ClusterOrchestrator
             {
                 var rawVal = v?.ToString() ?? string.Empty;
                 var decrypted = DecryptSecretString(rawVal, $"services.{serviceName}.{envPropName}.{k}", $"services.{serviceName}.env.{k}");
+                if (config != null)
+                {
+                    decrypted = RenderTemplateAndDecryptInlineSecrets(decrypted, config);
+                }
                 result[k] = decrypted;
             }
         }
@@ -547,16 +611,39 @@ public sealed partial class ClusterOrchestrator
         return result;
     }
 
-    private Dictionary<string, string> ExtractServiceFiles(string serviceName, JsonObject serviceObj)
+    private Dictionary<string, string> ExtractServiceFiles(string serviceName, JsonObject serviceObj, ConfigTree? config = null)
     {
         var result = new Dictionary<string, string>(StringComparer.Ordinal);
         if (serviceObj["files"] is JsonObject filesObj)
         {
             foreach (var (destPath, contentVal) in filesObj)
             {
-                var rawContent = contentVal?.ToString() ?? string.Empty;
-                var decrypted = DecryptSecretString(rawContent, $"services.{serviceName}.files.{destPath}");
-                result[destPath] = decrypted;
+                var raw = contentVal?.ToString() ?? string.Empty;
+                var fileContent = raw;
+
+                if (File.Exists(raw))
+                {
+                    fileContent = File.ReadAllText(raw);
+                }
+                else
+                {
+                    var fallback = Path.Combine("files", serviceName, Path.GetFileName(destPath));
+                    if (File.Exists(fallback))
+                    {
+                        fileContent = File.ReadAllText(fallback);
+                    }
+                }
+
+                if (config != null)
+                {
+                    fileContent = RenderTemplateAndDecryptInlineSecrets(fileContent, config);
+                }
+                else
+                {
+                    fileContent = DecryptSecretString(fileContent, $"services.{serviceName}.files.{destPath}");
+                }
+
+                result[destPath] = fileContent;
             }
         }
 
@@ -620,38 +707,51 @@ public sealed partial class ClusterOrchestrator
             return;
         }
 
-        var targetHost = targetNodeObj?["vpn_ip"]?.ToString() ?? targetNode.Host;
-
         foreach (var volume in volumes)
         {
             ct.ThrowIfCancellationRequested();
-            var hostPath = volume.Split(':')[0].Trim();
-            if (string.IsNullOrWhiteSpace(hostPath))
+            var rawVolPath = volume.Split(':')[0].Trim();
+            if (string.IsNullOrWhiteSpace(rawVolPath))
             {
                 continue;
             }
 
-            // Ensure destination directory exists on target
-            await targetNode.ExecuteCommandAsync(new ProcessSpec
-            {
-                Executable = "mkdir",
-                Arguments = ["-p", hostPath]
-            }, ct).ConfigureAwait(false);
+            var resolvedPath = rawVolPath.StartsWith('/')
+                ? rawVolPath
+                : $"/var/lib/docker/volumes/{rawVolPath}/_data";
 
-            logger?.Invoke($"Syncing volume '{hostPath}' via rsync to '{targetHost}:{hostPath}/'...");
+            logger?.Invoke($"Streaming volume '{rawVolPath}' ({resolvedPath}) through orchestrator binary pipe to '{targetNode.NodeName}'...");
 
-            var rsyncCmd = $"rsync -avz -e 'ssh -o StrictHostKeyChecking=no' {hostPath}/ {targetHost}:{hostPath}/";
-            var rsyncResult = await sourceNode.ExecuteCommandAsync(new ProcessSpec
+            using var pipeStream = new MemoryStream();
+
+            var saveCmd = $"mkdir -p '{resolvedPath}' && tar -C '{resolvedPath}' -cf - . | zstd -3";
+            var saveResult = await sourceNode.ExecuteStreamingCommandAsync(new ProcessSpec
             {
                 Executable = "sh",
-                Arguments = ["-c", rsyncCmd],
-                Timeout = TimeSpan.FromMinutes(20)
-            }, ct).ConfigureAwait(false);
+                Arguments = ["-c", saveCmd],
+                Timeout = TimeSpan.FromMinutes(30)
+            }, stdinStream: null, stdoutStream: pipeStream, ct).ConfigureAwait(false);
 
-            if (!rsyncResult.IsSuccess)
+            if (!saveResult.IsSuccess)
             {
-                logger?.Invoke($"Warning: rsync returned non-zero code {rsyncResult.ExitCode} for '{hostPath}': {rsyncResult.StandardError}");
+                throw new InvalidOperationException($"Failed to export volume '{rawVolPath}' on source node '{sourceNode.NodeName}': {saveResult.StandardError}");
             }
+
+            pipeStream.Position = 0;
+            var restoreCmd = $"mkdir -p '{resolvedPath}' && zstd -d | tar -C '{resolvedPath}' -xf -";
+            var restoreResult = await targetNode.ExecuteStreamingCommandAsync(new ProcessSpec
+            {
+                Executable = "sh",
+                Arguments = ["-c", restoreCmd],
+                Timeout = TimeSpan.FromMinutes(30)
+            }, stdinStream: pipeStream, stdoutStream: null, ct).ConfigureAwait(false);
+
+            if (!restoreResult.IsSuccess)
+            {
+                throw new InvalidOperationException($"Failed to restore volume '{rawVolPath}' on target node '{targetNode.NodeName}': {restoreResult.StandardError}");
+            }
+
+            logger?.Invoke($"✓ Successfully synced volume '{rawVolPath}' to '{targetNode.NodeName}'.");
         }
     }
 
@@ -963,7 +1063,7 @@ public sealed partial class ClusterOrchestrator
                 : meshPort;
 
             var endpoint = isPublic && !string.IsNullOrWhiteSpace(node.Host) && !string.Equals(node.Host, "localhost", StringComparison.OrdinalIgnoreCase)
-                ? $"{node.Host}:{listenPort}"
+                ? node.Host
                 : null;
 
             wgNodeConfigs.Add(new WireGuardNodeConfig(

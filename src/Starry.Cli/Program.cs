@@ -126,6 +126,7 @@ internal static class Program
             "SECRET" => Task.FromResult(HandleSecretCommand(commandArgs)),
             "ENCRYPT" => HandleEncryptCommand(commandArgs),
             "NODES" => HandleNodesCommand(commandArgs, localizer),
+            "ROTATE-KEYS" => HandleRotateKeysDirectCommand(commandArgs),
             "PLAN" => HandlePlanCommand(commandArgs),
             "APPLY" => HandleApplyCommand(commandArgs),
             "AGENT" => HandleAgentCommandAsync(commandArgs),
@@ -209,29 +210,39 @@ internal static class Program
             var orchestrator = new ClusterOrchestrator();
             var nodes = await orchestrator.ResolveNodesAsync(tree).ConfigureAwait(false);
 
-            var adoptionService = new HostAdoptionService();
-            var unmanaged = await adoptionService.ListUnmanagedContainersAsync(nodes, tree).ConfigureAwait(false);
-
-            if (unmanaged.Count == 0)
+            try
             {
-                AnsiConsole.MarkupLine("[green]✓ No unmanaged containers found. All host containers are under Starry GitOps management.[/]");
+                var adoptionService = new HostAdoptionService();
+                var unmanaged = await adoptionService.ListUnmanagedContainersAsync(nodes, tree).ConfigureAwait(false);
+
+                if (unmanaged.Count == 0)
+                {
+                    AnsiConsole.MarkupLine("[green]✓ No unmanaged containers found. All host containers are under Starry GitOps management.[/]");
+                    return 0;
+                }
+
+                var table = new Table().Border(TableBorder.Rounded);
+                table.AddColumn("[bold]Node[/]");
+                table.AddColumn("[bold]Container Name[/]");
+                table.AddColumn("[bold]Image[/]");
+                table.AddColumn("[bold]State[/]");
+
+                foreach (var item in unmanaged)
+                {
+                    table.AddRow(item.NodeName, item.ContainerName, item.Image, item.State);
+                }
+
+                AnsiConsole.Write(table);
+                AnsiConsole.MarkupLine($"\n[yellow]Found {unmanaged.Count} unmanaged container(s). Run 'starry adopt' to bring them under management.[/]");
                 return 0;
             }
-
-            var table = new Table().Border(TableBorder.Rounded);
-            table.AddColumn("[bold]Node[/]");
-            table.AddColumn("[bold]Container Name[/]");
-            table.AddColumn("[bold]Image[/]");
-            table.AddColumn("[bold]State[/]");
-
-            foreach (var item in unmanaged)
+            finally
             {
-                table.AddRow(item.NodeName, item.ContainerName, item.Image, item.State);
+                foreach (var node in nodes)
+                {
+                    await node.DisposeAsync().ConfigureAwait(false);
+                }
             }
-
-            AnsiConsole.Write(table);
-            AnsiConsole.MarkupLine($"\n[yellow]Found {unmanaged.Count} unmanaged container(s). Run 'starry adopt' to bring them under management.[/]");
-            return 0;
         }
         catch (Exception ex)
         {
@@ -306,11 +317,20 @@ internal static class Program
 
         if (string.Equals(subCommand, "run", StringComparison.OrdinalIgnoreCase))
         {
+            var configPath = ExtractOptionValue(args, "--config") ??
+                             (File.Exists("/etc/starry/starry.yaml") ? "/etc/starry/starry.yaml" : ".");
+            var agentOptions = new AgentOptions();
+
+            if (File.Exists(configPath) || Directory.Exists(configPath))
+            {
+                agentOptions = LoadAgentOptionsFromConfig(configPath);
+            }
+
             using var cts = new CancellationTokenSource();
             Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
             await using var daemon = new StarryAgentDaemon();
             AnsiConsole.MarkupLine("[bold yellow]Starting Starry Agent Daemon...[/] [grey](Press Ctrl+C to stop)[/]");
-            await daemon.RunAsync(new AgentOptions(), cts.Token).ConfigureAwait(false);
+            await daemon.RunAsync(agentOptions, cts.Token).ConfigureAwait(false);
             return 0;
         }
 
@@ -335,6 +355,46 @@ internal static class Program
 
         AnsiConsole.MarkupLine("[red]Usage: starry agent (run|install-service|status)[/]");
         return 1;
+    }
+
+    private static AgentOptions LoadAgentOptionsFromConfig(string configPath)
+    {
+        try
+        {
+            var engine = new VirtualConfigEngine();
+            var tree = engine.Load(configPath);
+            var internalRecords = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+            if (tree.Root["services"] is JsonObject servicesObj)
+            {
+                foreach (var (svcName, svcVal) in servicesObj)
+                {
+                    var vipStr = svcVal?["vip"]?.ToString() ?? svcVal?["vip_address"]?.ToString();
+                    if (!string.IsNullOrWhiteSpace(vipStr))
+                    {
+                        internalRecords[$"{svcName}.internal"] = vipStr;
+                    }
+                }
+            }
+
+            if (tree.Root["nodes"] is JsonObject nodesObj)
+            {
+                foreach (var (nodeName, nodeVal) in nodesObj)
+                {
+                    var vpnIpStr = nodeVal?["vpn_ip"]?.ToString();
+                    if (!string.IsNullOrWhiteSpace(vpnIpStr))
+                    {
+                        internalRecords[$"{nodeName}.internal"] = vpnIpStr;
+                    }
+                }
+            }
+
+            return new AgentOptions { InternalDnsRecords = internalRecords };
+        }
+        catch (Exception)
+        {
+            return new AgentOptions();
+        }
     }
 
     private static Task<int> HandleConfigCommand(string[] args, ILocalizer localizer)
@@ -926,39 +986,46 @@ internal static class Program
         }
     }
 
+    private static async Task<int> HandleRotateKeysDirectCommand(string[] args)
+    {
+        return await ExecuteNodesRotateKeysAsync(args).ConfigureAwait(false);
+    }
+
     private static async Task<int> ExecuteNodesRotateKeysAsync(string[] args)
     {
         var nodeName = ExtractOptionValue(args, "--node");
-        var oldPubKey = ExtractOptionValue(args, "--old-pubkey");
+        var oldPubKey = ExtractOptionValue(args, "--old-pubkey") ?? string.Empty;
         var configPath = ExtractOptionValue(args, "--config") ?? ".";
-
-        if (string.IsNullOrEmpty(nodeName) || string.IsNullOrEmpty(oldPubKey))
-        {
-            AnsiConsole.MarkupLine("[red]Usage: starry nodes rotate-keys --node <nodeName> --old-pubkey <pubKey> [--config <path>][/]");
-            return 1;
-        }
 
         try
         {
             var engine = new VirtualConfigEngine();
             var tree = engine.Load(configPath);
+            var orchestrator = new ClusterOrchestrator();
 
-            var nodePath = $"nodes.{nodeName}";
-            var nodeVal = tree.FindNode(nodePath) as JsonObject;
-            if (nodeVal == null)
+            if (tree.Root["nodes"] is not JsonObject nodesObj || nodesObj.Count == 0)
             {
-                AnsiConsole.MarkupLine($"[red]Node '{Markup.Escape(nodeName)}' not found in configuration.[/]");
-                return 1;
+                AnsiConsole.MarkupLine("[yellow]No nodes defined in cluster configuration.[/]");
+                return 0;
             }
 
-            var host = nodeVal["host"]?.ToString() ?? "localhost";
-            var port = nodeVal.TryGetPropertyValue("port", out var pVal) && int.TryParse(pVal?.ToString(), CultureInfo.InvariantCulture, out var p) ? p : 22;
-            var user = nodeVal["user"]?.ToString() ?? "root";
+            var targets = !string.IsNullOrEmpty(nodeName)
+                ? [nodeName]
+                : nodesObj.Select(kv => kv.Key).ToList();
 
-            await using var conn = new SshNodeConnection(new SshNodeOptions { NodeName = nodeName, Host = host, Port = port, User = user });
-            var newPrivateKey = await NodeOperationsService.RotateSshKeysAsync(conn, oldPubKey, msg => AnsiConsole.MarkupLine($"[grey]  > {Markup.Escape(msg)}[/]")).ConfigureAwait(false);
+            foreach (var target in targets)
+            {
+                if (nodesObj[target] is not JsonObject nodeObj)
+                {
+                    continue;
+                }
 
-            nodeVal["ssh_key"] = $"PLAIN[{newPrivateKey}]";
+                await using var conn = await orchestrator.ResolveNodeConnectionAsync(target, nodeObj).ConfigureAwait(false);
+                var newPrivateKey = await NodeOperationsService.RotateSshKeysAsync(conn, oldPubKey, msg => AnsiConsole.MarkupLine($"[grey]  > {Markup.Escape(msg)}[/]")).ConfigureAwait(false);
+
+                nodeObj["ssh_key"] = $"PLAIN[{newPrivateKey}]";
+            }
+
             var masterKey = ResolveKeyFromArgsOrEnv(args, "--key", "STARRY_MASTER_KEY");
             if (masterKey != null)
             {
@@ -970,7 +1037,7 @@ internal static class Program
                 engine.Pack(tree, configPath, "yaml");
             }
 
-            AnsiConsole.MarkupLine($"[bold green]✓ Successfully rotated SSH keys for node '{Markup.Escape(nodeName)}' and updated configuration![/]");
+            AnsiConsole.MarkupLine($"[bold green]✓ Successfully rotated SSH keys for {targets.Count} node(s) and updated configuration![/]");
             return 0;
         }
         catch (Exception ex)
@@ -1060,27 +1127,37 @@ internal static class Program
             AnsiConsole.MarkupLine("[grey]Resolving active connections to cluster nodes...[/]");
             var nodes = await orchestrator.ResolveNodesAsync(tree).ConfigureAwait(false);
 
-            AnsiConsole.MarkupLine("[grey]Discovering live container placements...[/]");
-            var livePlacements = await orchestrator.DiscoverLiveStateAsync(tree).ConfigureAwait(false);
-
-            var plan = MigrationPlanner.BuildPlan(tree, livePlacements);
-
-            if (!plan.HasChanges)
+            try
             {
-                AnsiConsole.MarkupLine("[green]✓ No changes to apply. Cluster is in desired state.[/]");
+                AnsiConsole.MarkupLine("[grey]Discovering live container placements...[/]");
+                var livePlacements = await orchestrator.DiscoverLiveStateAsync(tree, nodes).ConfigureAwait(false);
+
+                var plan = MigrationPlanner.BuildPlan(tree, livePlacements);
+
+                if (!plan.HasChanges)
+                {
+                    AnsiConsole.MarkupLine("[green]✓ No changes to apply. Cluster is in desired state.[/]");
+                    return 0;
+                }
+
+                AnsiConsole.MarkupLine($"[bold yellow]Applying {plan.Actions.Count} planned action(s) to cluster '{Markup.Escape(plan.ClusterName)}'...[/]");
+
+                await orchestrator.ExecutePlanAsync(
+                    plan,
+                    tree,
+                    nodes,
+                    msg => AnsiConsole.MarkupLine($"[grey]  > {Markup.Escape(msg)}[/]")).ConfigureAwait(false);
+
+                AnsiConsole.MarkupLine("\n[bold green]✓ Apply complete! All resources are in desired state.[/]");
                 return 0;
             }
-
-            AnsiConsole.MarkupLine($"[bold yellow]Applying {plan.Actions.Count} planned action(s) to cluster '{Markup.Escape(plan.ClusterName)}'...[/]");
-
-            await orchestrator.ExecutePlanAsync(
-                plan,
-                tree,
-                nodes,
-                msg => AnsiConsole.MarkupLine($"[grey]  > {Markup.Escape(msg)}[/]")).ConfigureAwait(false);
-
-            AnsiConsole.MarkupLine("\n[bold green]✓ Apply complete! All resources are in desired state.[/]");
-            return 0;
+            finally
+            {
+                foreach (var node in nodes)
+                {
+                    await node.DisposeAsync().ConfigureAwait(false);
+                }
+            }
         }
         catch (Exception ex)
         {
@@ -1089,27 +1166,59 @@ internal static class Program
         }
     }
 
-    private static Task<int> HandleVolumeCommand(string[] args)
+    private static async Task<int> HandleVolumeCommand(string[] args)
     {
         var subCommand = args.Length > 0 ? args[0] : "help";
         if (string.Equals(subCommand, "open", StringComparison.OrdinalIgnoreCase))
         {
             if (args.Length < 3)
             {
-                AnsiConsole.MarkupLine("[red]Usage: starry volume open <node> <volumePath>[/]");
-                return Task.FromResult(1);
+                AnsiConsole.MarkupLine("[red]Usage: starry volume open <node> <volumePath> [--config <path>] [--once][/]");
+                return 1;
             }
 
             var nodeName = args[1];
             var volumePath = args[2];
-            AnsiConsole.MarkupLine($"[bold yellow]Opening Volume Explorer for volume '[cyan]{Markup.Escape(volumePath)}[/]' on node '[cyan]{Markup.Escape(nodeName)}[/]'...[/]");
-            AnsiConsole.MarkupLine("[green]✓ Remote volume is accessible via SFTP or SSH mount.[/]");
-            AnsiConsole.MarkupLine($"[grey]Connection URI: sftp://{Markup.Escape(nodeName)}{Markup.Escape(volumePath)}[/]");
-            return Task.FromResult(0);
+            var configPath = ExtractOptionValue(args, "--config") ?? ".";
+            var once = args.Any(a => string.Equals(a, "--once", StringComparison.OrdinalIgnoreCase));
+
+            try
+            {
+                var engine = new VirtualConfigEngine();
+                var tree = engine.Load(configPath);
+                var orchestrator = new ClusterOrchestrator();
+                var nodeObj = tree.Root["nodes"]?[nodeName] as JsonObject
+                    ?? throw new InvalidOperationException($"Node '{nodeName}' not found in configuration.");
+
+                await using var conn = await orchestrator.ResolveNodeConnectionAsync(nodeName, nodeObj).ConfigureAwait(false);
+
+                AnsiConsole.MarkupLine($"[bold yellow]Querying volume files for '[cyan]{Markup.Escape(volumePath)}[/]' on '[cyan]{Markup.Escape(nodeName)}[/]'...[/]");
+                var listResult = await conn.ExecuteCommandAsync(new ProcessSpec
+                {
+                    Executable = "sh",
+                    Arguments = ["-c", $"ls -la '{volumePath}' 2>/dev/null || ls -la '/var/lib/docker/volumes/{volumePath}/_data' 2>/dev/null || echo 'Empty or not found'"]
+                }).ConfigureAwait(false);
+
+                AnsiConsole.MarkupLine("[green]✓ Volume contents:[/]");
+                AnsiConsole.WriteLine(listResult.StandardOutput);
+
+                if (once)
+                {
+                    return 0;
+                }
+
+                AnsiConsole.MarkupLine("[grey]Volume explorer listening at sftp/ssh bridge. Press Ctrl+C to stop.[/]");
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                AnsiConsole.MarkupLine($"[red]Volume open failed: {Markup.Escape(ex.Message)}[/]");
+                return 1;
+            }
         }
 
-        AnsiConsole.MarkupLine("[yellow]Usage: starry volume open <node> <volumePath>[/]");
-        return Task.FromResult(0);
+        AnsiConsole.MarkupLine("[yellow]Usage: starry volume open <node> <volumePath> [--once][/]");
+        return 0;
     }
 
     private static Task<int> HandleBundleCommand(string[] args)

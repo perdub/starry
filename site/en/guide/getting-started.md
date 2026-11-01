@@ -139,8 +139,8 @@ mesh:
 
 nodes:
   node-01:
-    address: "203.0.113.10"
-    mesh_ip: "10.42.0.1"
+    host: "203.0.113.10"
+    vpn_ip: "10.42.0.1"
     engine: "docker"
     packages:
       - curl

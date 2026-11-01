@@ -1,6 +1,8 @@
 name: Repository Dump
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       output_filename:

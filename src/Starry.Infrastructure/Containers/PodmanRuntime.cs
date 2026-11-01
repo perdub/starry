@@ -10,6 +10,8 @@ public sealed class PodmanRuntime : BaseSocketContainerRuntime
     protected override IReadOnlyList<string> CandidateSocketPaths { get; } =
     [
         "/run/podman/podman.sock",
-        "/var/run/podman/podman.sock"
+        "/var/run/podman/podman.sock",
+        "/run/user/1000/podman/podman.sock",
+        "/run/user/0/podman/podman.sock"
     ];
 }

@@ -171,7 +171,10 @@ public abstract class BaseSocketContainerRuntime : IContainerRuntime
             }, ct).ConfigureAwait(false);
         }
 
-        // Pull / verify image, then create and start container
+        // Ensure image is pulled locally before creating container
+        await EnsureImageAvailableAsync(client, spec.Image, ct).ConfigureAwait(false);
+
+        // Create and start container
         var createPayload = BuildCreateContainerPayload(spec);
         using var createContent = new StringContent(createPayload.ToJsonString(), Encoding.UTF8, "application/json");
 
@@ -359,6 +362,23 @@ public abstract class BaseSocketContainerRuntime : IContainerRuntime
         }
 
         return (exposedPorts, portBindings);
+    }
+
+    private static async Task EnsureImageAvailableAsync(HttpClient client, string image, CancellationToken ct)
+    {
+        var inspectUri = new Uri(BaseDockerUri, $"{ApiVersionPrefix}/images/{Uri.EscapeDataString(image)}/json");
+        using var inspectRes = await client.GetAsync(inspectUri, ct).ConfigureAwait(false);
+        if (inspectRes.IsSuccessStatusCode)
+        {
+            return;
+        }
+
+        var pullUri = new Uri(BaseDockerUri, $"{ApiVersionPrefix}/images/create?fromImage={Uri.EscapeDataString(image)}");
+        using var pullRes = await client.PostAsync(pullUri, content: null, ct).ConfigureAwait(false);
+        if (pullRes.IsSuccessStatusCode)
+        {
+            await pullRes.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+        }
     }
 
     private static async Task StartContainerAsync(HttpClient client, string containerId, CancellationToken ct)

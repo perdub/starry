@@ -289,21 +289,31 @@ public sealed class SecretManager
             return;
         }
 
-        var fileNameNoExt = Path.GetFileNameWithoutExtension(relativeFile);
-        var dirName = Path.GetDirectoryName(relativeFile)?.Replace('\\', '/');
+        var pathWithoutExt = Path.Combine(
+            Path.GetDirectoryName(relativeFile) ?? string.Empty,
+            Path.GetFileNameWithoutExtension(relativeFile)).Replace('\\', '/');
 
+        var fileNameNoExt = Path.GetFileNameWithoutExtension(relativeFile);
         JsonNode? subtree = null;
-        if (string.Equals(dirName, "nodes", StringComparison.OrdinalIgnoreCase) && tree.Root["nodes"] is JsonObject nodesObj)
+        if (string.Equals(fileNameNoExt, "starry", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(fileNameNoExt, "config", StringComparison.OrdinalIgnoreCase))
         {
-            subtree = nodesObj[fileNameNoExt];
+            // Root properties that belong to this file
+            var rootObj = new JsonObject();
+            foreach (var (k, v) in tree.Root)
+            {
+                if (tree.SourceMap.TryGetValue(k, out var sm) &&
+                    string.Equals(Path.GetFileName(sm.FilePath), Path.GetFileName(relativeFile), StringComparison.OrdinalIgnoreCase))
+                {
+                    rootObj[k] = v != null ? JsonNode.Parse(v.ToJsonString()) : null;
+                }
+            }
+            subtree = rootObj.Count > 0 ? rootObj : tree.Root;
         }
-        else if (string.Equals(dirName, "services", StringComparison.OrdinalIgnoreCase) && tree.Root["services"] is JsonObject svcObj)
+        else
         {
-            subtree = svcObj[fileNameNoExt];
-        }
-        else if (string.IsNullOrEmpty(dirName) || string.Equals(fileNameNoExt, "starry", StringComparison.OrdinalIgnoreCase))
-        {
-            subtree = tree.Root;
+            var canonicalPrefix = pathWithoutExt.Replace('/', '.');
+            subtree = tree.FindNode(canonicalPrefix);
         }
 
         if (subtree != null)

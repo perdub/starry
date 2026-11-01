@@ -28,21 +28,9 @@ public class AdvancedChaosScenariosTests
         public int Port => 22;
         public string? DistroId => "ubuntu";
 
-        public Task<ProcessResult> ExecuteCommandAsync(ProcessSpec command, CancellationToken ct = default)
-        {
-            throw failureToThrow;
-        }
-
-        public Task<ProcessResult> ExecuteStreamingCommandAsync(ProcessSpec command, Stream? stdinStream, Stream? stdoutStream, CancellationToken ct = default)
-        {
-            throw failureToThrow;
-        }
-
-        public Task<HttpClient> CreateSocketHttpClientAsync(string socketPath, CancellationToken ct = default)
-        {
-            throw failureToThrow;
-        }
-
+        public Task<ProcessResult> ExecuteCommandAsync(ProcessSpec command, CancellationToken ct = default) => throw failureToThrow;
+        public Task<ProcessResult> ExecuteStreamingCommandAsync(ProcessSpec command, Stream? stdinStream, Stream? stdoutStream, CancellationToken ct = default) => throw failureToThrow;
+        public Task<HttpClient> CreateSocketHttpClientAsync(string socketPath, CancellationToken ct = default) => throw failureToThrow;
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
@@ -53,15 +41,11 @@ public class AdvancedChaosScenariosTests
         public int Port => 22;
         public string? DistroId => "ubuntu";
 
-        public Task<ProcessResult> ExecuteCommandAsync(ProcessSpec command, CancellationToken ct = default)
-        {
-            return Task.FromResult(new ProcessResult(0, "success", string.Empty, TimeSpan.Zero));
-        }
+        public Task<ProcessResult> ExecuteCommandAsync(ProcessSpec command, CancellationToken ct = default) =>
+            Task.FromResult(new ProcessResult(0, "success", string.Empty, TimeSpan.Zero));
 
-        public Task<ProcessResult> ExecuteStreamingCommandAsync(ProcessSpec command, Stream? stdinStream, Stream? stdoutStream, CancellationToken ct = default)
-        {
-            return Task.FromResult(new ProcessResult(0, "success", string.Empty, TimeSpan.Zero));
-        }
+        public Task<ProcessResult> ExecuteStreamingCommandAsync(ProcessSpec command, Stream? stdinStream, Stream? stdoutStream, CancellationToken ct = default) =>
+            Task.FromResult(new ProcessResult(0, "success", string.Empty, TimeSpan.Zero));
 
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope", Justification = "HttpClient owns handler")]
         public Task<HttpClient> CreateSocketHttpClientAsync(string socketPath, CancellationToken ct = default)
@@ -73,6 +57,66 @@ public class AdvancedChaosScenariosTests
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
+    private sealed class MockRecordingNodeConnection(string nodeName) : INodeConnection
+    {
+        public string NodeName => nodeName;
+        public string Host => "198.51.100.10";
+        public int Port => 22;
+        public string? DistroId => "ubuntu";
+        public List<string> ExecutedCommands { get; } = [];
+
+        public Task<ProcessResult> ExecuteCommandAsync(ProcessSpec command, CancellationToken ct = default)
+        {
+            ExecutedCommands.Add(string.Join(" ", command.Arguments));
+            return Task.FromResult(new ProcessResult(0, "success", string.Empty, TimeSpan.Zero));
+        }
+
+        public Task<ProcessResult> ExecuteStreamingCommandAsync(ProcessSpec command, Stream? stdinStream, Stream? stdoutStream, CancellationToken ct = default)
+        {
+            ExecutedCommands.Add(string.Join(" ", command.Arguments));
+            return Task.FromResult(new ProcessResult(0, "success", string.Empty, TimeSpan.Zero));
+        }
+
+        public Task<HttpClient> CreateSocketHttpClientAsync(string socketPath, CancellationToken ct = default) =>
+            Task.FromResult(new HttpClient());
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class MockBinaryStreamingNodeConnection(string nodeName, byte[] payload) : INodeConnection
+    {
+        public string NodeName => nodeName;
+        public string Host => "198.51.100.10";
+        public int Port => 22;
+        public string? DistroId => "ubuntu";
+        public byte[] ReceivedBytes { get; private set; } = [];
+
+        public Task<ProcessResult> ExecuteCommandAsync(ProcessSpec command, CancellationToken ct = default) =>
+            Task.FromResult(new ProcessResult(0, "success", string.Empty, TimeSpan.Zero));
+
+        public async Task<ProcessResult> ExecuteStreamingCommandAsync(ProcessSpec command, Stream? stdinStream, Stream? stdoutStream, CancellationToken ct = default)
+        {
+            if (stdoutStream != null && payload.Length > 0)
+            {
+                await stdoutStream.WriteAsync(payload, ct);
+            }
+
+            if (stdinStream != null)
+            {
+                using var ms = new MemoryStream();
+                await stdinStream.CopyToAsync(ms, ct);
+                ReceivedBytes = ms.ToArray();
+            }
+
+            return new ProcessResult(0, "success", string.Empty, TimeSpan.Zero);
+        }
+
+        public Task<HttpClient> CreateSocketHttpClientAsync(string socketPath, CancellationToken ct = default) =>
+            Task.FromResult(new HttpClient());
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
     private sealed class MockSuccessHttpMessageHandler : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -80,6 +124,21 @@ public class AdvancedChaosScenariosTests
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent("{\"Id\":\"mock-container-id\",\"State\":\"running\",\"Status\":\"Up\"}", Encoding.UTF8, "application/json")
+            });
+        }
+    }
+
+    private sealed class MockRetryingHttpMessageHandler(Queue<HttpStatusCode> responses) : HttpMessageHandler
+    {
+        public int RequestCount { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            RequestCount++;
+            var status = responses.Count > 0 ? responses.Dequeue() : HttpStatusCode.OK;
+            return Task.FromResult(new HttpResponseMessage(status)
+            {
+                Content = new StringContent("{}", Encoding.UTF8, "application/json")
             });
         }
     }
@@ -97,18 +156,15 @@ public class AdvancedChaosScenariosTests
         var livePlacements = new Dictionary<string, string>(StringComparer.Ordinal) { ["api"] = "bocchi" };
         var plan = MigrationPlanner.BuildPlan(tree, livePlacements);
 
-        // Target node suffers mid-migration SSH disconnect (IOException)
         await using var failingTargetNode = new MockFailingNodeConnection("nijika", new IOException("Connection dropped mid-transfer"));
         await using var sourceNode = new MockSuccessNodeConnection("bocchi");
 
         var orchestrator = new ClusterOrchestrator();
         var loggedSteps = new List<string>();
 
-        // Execution must fail and throw before cutover
         await Assert.ThrowsAsync<IOException>(() =>
             orchestrator.ExecutePlanAsync(plan, tree, [sourceNode, failingTargetNode], loggedSteps.Add));
 
-        // Ensure DNS cutover was never reached
         Assert.DoesNotContain(loggedSteps, s => s.Contains("DNS record", StringComparison.OrdinalIgnoreCase));
     }
 
@@ -123,6 +179,18 @@ public class AdvancedChaosScenariosTests
 
         try
         {
+            var provider = new RcloneBackupStorageProvider("s3:my-bucket/backups");
+            await using var mockNode = new MockRecordingNodeConnection("local-node");
+
+            await provider.StreamBackupAsync(mockNode, volPath, "backup-01");
+
+            // Verify the command executed is in-memory streaming: tar -C ... | zstd -3 | rclone rcat ...
+            Assert.Contains(mockNode.ExecutedCommands, cmd =>
+                cmd.Contains("rclone rcat 's3:my-bucket/backups/backup-01.tar.zst'", StringComparison.Ordinal) &&
+                cmd.Contains("zstd -3", StringComparison.Ordinal) &&
+                cmd.Contains("tar -C", StringComparison.Ordinal));
+
+            // Verify 0 temporary tar files were written to disk
             var checkNoTempFiles = Directory.GetFiles(tempDir, "*.tar*");
             Assert.Empty(checkNoTempFiles);
         }
@@ -136,12 +204,16 @@ public class AdvancedChaosScenariosTests
     public async Task Chaos3_PrivateRegistryDown_P2PStreamTransfersImageBinaryIntact()
     {
         var runtime = new DockerRuntime();
-        await using var sourceNode = new LocalNodeConnection("source-node");
-        await using var targetNode = new LocalNodeConnection("target-node");
+        // Array containing tricky non-UTF8 binary byte sequences
+        byte[] originalBinaryPayload = [0xFF, 0x00, 0x80, 0xFE, 0xAA, 0x55, 0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x12, 0x34];
 
-        // Verify that StreamImagePeerToPeerAsync uses binary memory stream and not string conversion
-        await Assert.ThrowsAnyAsync<Exception>(() =>
-            runtime.StreamImagePeerToPeerAsync(sourceNode, targetNode, "non-existent-img:tag"));
+        await using var sourceNode = new MockBinaryStreamingNodeConnection("source-node", originalBinaryPayload);
+        await using var targetNode = new MockBinaryStreamingNodeConnection("target-node", []);
+
+        await runtime.StreamImagePeerToPeerAsync(sourceNode, targetNode, "custom-image:v1");
+
+        // Assert 100% byte-for-byte exact binary transmission through pipes
+        Assert.Equal(originalBinaryPayload, targetNode.ReceivedBytes);
     }
 
     [Fact]
@@ -149,19 +221,22 @@ public class AdvancedChaosScenariosTests
     {
         var ruleset = NftablesService.GenerateRuleset([], [80, 443]);
 
-        // Verifies table inet starry is cleanly purged and recreated before rules are appended
         Assert.Contains("table inet starry\ndelete table inet starry\ntable inet starry {", ruleset, StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task Chaos5_DnsProvider_ThrowsOnRateLimitAndServerError()
+    public async Task Chaos5_DnsProvider_RetriesWithBackoffOnTransientErrors()
     {
-        var provider = new WebhookDnsProvider(new Uri("https://127.0.0.1:59999/unreachable-dns"));
-        var record = new DnsRecord("rec1", "A", "test.example.com", "1.2.3.4");
+        // First request returns 429, second returns 502, third succeeds with 200 OK
+        var responses = new Queue<HttpStatusCode>([HttpStatusCode.TooManyRequests, HttpStatusCode.BadGateway, HttpStatusCode.OK]);
+        using var handler = new MockRetryingHttpMessageHandler(responses);
+        using var client = new HttpClient(handler) { BaseAddress = new Uri("https://api.cloudflare.com/client/v4/") };
 
-        // Must throw HttpRequestException on network refusal
-        await Assert.ThrowsAsync<HttpRequestException>(() =>
-            provider.UpsertRecordAsync("example.com", record));
+        var provider = new CloudflareDnsProvider("fake-token", client);
+        var records = await provider.GetRecordsAsync("example.com");
+
+        Assert.NotNull(records);
+        Assert.True(handler.RequestCount >= 2);
     }
 
     [Fact]
@@ -184,6 +259,6 @@ public class AdvancedChaosScenariosTests
 
         Assert.NotNull(migrationAction);
         Assert.Equal(PlanActionType.MigrateServiceBlueGreen, migrationAction.ActionType);
-        Assert.Equal(60, migrationAction.Priority); // 50 base + 10 service priority
+        Assert.Equal(60, migrationAction.Priority);
     }
 }

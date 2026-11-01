@@ -32,7 +32,15 @@ public sealed class NodeOperationsService
         var rebootRequired = await pkgManager.IsRebootRequiredAsync(node, ct).ConfigureAwait(false);
         if (rebootRequired)
         {
-            logger?.Invoke($"Node '{node.NodeName}' requires a reboot. Initiating rolling reboot...");
+            logger?.Invoke($"Node '{node.NodeName}' requires a reboot. Draining containers before rolling restart...");
+            await node.ExecuteCommandAsync(new ProcessSpec
+            {
+                Executable = "sh",
+                Arguments = ["-c", "docker stop $(docker ps -q) 2>/dev/null || podman stop $(podman ps -q) 2>/dev/null || true"],
+                Timeout = TimeSpan.FromMinutes(2)
+            }, ct).ConfigureAwait(false);
+
+            logger?.Invoke($"Initiating rolling reboot on '{node.NodeName}'...");
             await RebootAndWaitAsync(node, logger, ct).ConfigureAwait(false);
             logger?.Invoke($"Node '{node.NodeName}' successfully rebooted and online.");
         }

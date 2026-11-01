@@ -71,6 +71,7 @@ public sealed class VirtualConfigEngine
 
         var files = Directory.GetFiles(dirPath, "*.*", SearchOption.AllDirectories)
             .Where(f => supportedExtensions.Contains(Path.GetExtension(f)))
+            .Where(f => !IsExcludedConfigPath(dirPath, f))
             .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
@@ -112,6 +113,25 @@ public sealed class VirtualConfigEngine
         }
 
         return tree;
+    }
+
+    private static bool IsExcludedConfigPath(string rootDir, string fullPath)
+    {
+        var rel = Path.GetRelativePath(rootDir, fullPath).Replace('\\', '/');
+        var fileName = Path.GetFileName(rel);
+
+        if (string.Equals(fileName, "manifest.json", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var segments = rel.Split('/');
+        return segments.Any(s =>
+            string.Equals(s, "files", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(s, ".starry", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(s, ".git", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(s, "node_modules", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(s, "dist", StringComparison.OrdinalIgnoreCase));
     }
 
     private static void PopulateObjectIntoTree(ConfigTree tree, JsonObject obj, string prefix, string filePath)

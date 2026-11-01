@@ -1,12 +1,11 @@
 using System.Net.Http.Headers;
-using System.Net.Http.Json;
 using System.Text.Json.Nodes;
 using Starry.Core.Dns;
 
 namespace Starry.Infrastructure.Dns;
 
 /// <summary>
-/// Cloudflare DNS v4 API provider implementation.
+/// Cloudflare DNS v4 API provider implementation with automated retry and backoff.
 /// </summary>
 public sealed class CloudflareDnsProvider : IDnsProvider
 {
@@ -27,10 +26,13 @@ public sealed class CloudflareDnsProvider : IDnsProvider
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(zoneDomain);
 
-        using var request = new HttpRequestMessage(HttpMethod.Get, $"zones?name={Uri.EscapeDataString(zoneDomain)}");
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiToken);
+        using var zoneRes = await SendWithRetryAsync(() =>
+        {
+            var req = new HttpRequestMessage(HttpMethod.Get, $"zones?name={Uri.EscapeDataString(zoneDomain)}");
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiToken);
+            return req;
+        }, ct).ConfigureAwait(false);
 
-        using var zoneRes = await _httpClient.SendAsync(request, ct).ConfigureAwait(false);
         zoneRes.EnsureSuccessStatusCode();
 
         var zoneStr = await zoneRes.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
@@ -41,10 +43,13 @@ public sealed class CloudflareDnsProvider : IDnsProvider
             return [];
         }
 
-        using var recordsReq = new HttpRequestMessage(HttpMethod.Get, $"zones/{zoneId}/dns_records");
-        recordsReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiToken);
+        using var recordsRes = await SendWithRetryAsync(() =>
+        {
+            var req = new HttpRequestMessage(HttpMethod.Get, $"zones/{zoneId}/dns_records");
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiToken);
+            return req;
+        }, ct).ConfigureAwait(false);
 
-        using var recordsRes = await _httpClient.SendAsync(recordsReq, ct).ConfigureAwait(false);
         recordsRes.EnsureSuccessStatusCode();
 
         var recordsStr = await recordsRes.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
@@ -93,22 +98,30 @@ public sealed class CloudflareDnsProvider : IDnsProvider
 
         if (existing != null)
         {
-            using var putReq = new HttpRequestMessage(HttpMethod.Put, $"zones/{zoneId}/dns_records/{existing.Id}")
+            using var putRes = await SendWithRetryAsync(() =>
             {
-                Content = new StringContent(payload.ToJsonString(), System.Text.Encoding.UTF8, "application/json")
-            };
-            putReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiToken);
-            using var putRes = await _httpClient.SendAsync(putReq, ct).ConfigureAwait(false);
+                var req = new HttpRequestMessage(HttpMethod.Put, $"zones/{zoneId}/dns_records/{existing.Id}")
+                {
+                    Content = new StringContent(payload.ToJsonString(), System.Text.Encoding.UTF8, "application/json")
+                };
+                req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiToken);
+                return req;
+            }, ct).ConfigureAwait(false);
+
             putRes.EnsureSuccessStatusCode();
         }
         else
         {
-            using var postReq = new HttpRequestMessage(HttpMethod.Post, $"zones/{zoneId}/dns_records")
+            using var postRes = await SendWithRetryAsync(() =>
             {
-                Content = new StringContent(payload.ToJsonString(), System.Text.Encoding.UTF8, "application/json")
-            };
-            postReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiToken);
-            using var postRes = await _httpClient.SendAsync(postReq, ct).ConfigureAwait(false);
+                var req = new HttpRequestMessage(HttpMethod.Post, $"zones/{zoneId}/dns_records")
+                {
+                    Content = new StringContent(payload.ToJsonString(), System.Text.Encoding.UTF8, "application/json")
+                };
+                req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiToken);
+                return req;
+            }, ct).ConfigureAwait(false);
+
             postRes.EnsureSuccessStatusCode();
         }
     }
@@ -119,19 +132,25 @@ public sealed class CloudflareDnsProvider : IDnsProvider
         ArgumentException.ThrowIfNullOrWhiteSpace(recordId);
 
         var zoneId = await ResolveZoneIdAsync(zoneDomain, ct).ConfigureAwait(false);
-        using var delReq = new HttpRequestMessage(HttpMethod.Delete, $"zones/{zoneId}/dns_records/{recordId}");
-        delReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiToken);
+        using var delRes = await SendWithRetryAsync(() =>
+        {
+            var req = new HttpRequestMessage(HttpMethod.Delete, $"zones/{zoneId}/dns_records/{recordId}");
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiToken);
+            return req;
+        }, ct).ConfigureAwait(false);
 
-        using var delRes = await _httpClient.SendAsync(delReq, ct).ConfigureAwait(false);
         delRes.EnsureSuccessStatusCode();
     }
 
     private async Task<string> ResolveZoneIdAsync(string zoneDomain, CancellationToken ct)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Get, $"zones?name={Uri.EscapeDataString(zoneDomain)}");
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiToken);
+        using var zoneRes = await SendWithRetryAsync(() =>
+        {
+            var req = new HttpRequestMessage(HttpMethod.Get, $"zones?name={Uri.EscapeDataString(zoneDomain)}");
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiToken);
+            return req;
+        }, ct).ConfigureAwait(false);
 
-        using var zoneRes = await _httpClient.SendAsync(request, ct).ConfigureAwait(false);
         zoneRes.EnsureSuccessStatusCode();
 
         var zoneStr = await zoneRes.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
@@ -153,5 +172,33 @@ public sealed class CloudflareDnsProvider : IDnsProvider
         }
 
         return null;
+    }
+
+    private async Task<HttpResponseMessage> SendWithRetryAsync(Func<HttpRequestMessage> requestFactory, CancellationToken ct)
+    {
+        var delays = new[] { 100, 300, 700 };
+
+        for (var attempt = 0; attempt <= delays.Length; attempt++)
+        {
+            var req = requestFactory();
+            try
+            {
+                var response = await _httpClient.SendAsync(req, ct).ConfigureAwait(false);
+                var code = (int)response.StatusCode;
+                if (code is not (429 or 502 or 503 or 504) || attempt == delays.Length)
+                {
+                    return response;
+                }
+
+                response.Dispose();
+                await Task.Delay(delays[attempt], ct).ConfigureAwait(false);
+            }
+            catch (HttpRequestException) when (attempt < delays.Length)
+            {
+                await Task.Delay(delays[attempt], ct).ConfigureAwait(false);
+            }
+        }
+
+        throw new HttpRequestException("HTTP request failed after retries.");
     }
 }

@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text;
 using Starry.Infrastructure.Network;
 using Xunit;
 
@@ -32,7 +33,7 @@ public class InternalDnsServerTests
     }
 
     [Fact]
-    public async Task HandleDnsQuery_ReturnsNullForUnknownDomain()
+    public async Task HandleDnsQuery_ReturnsNxDomainForUnknownDomain()
     {
         await using var server = new InternalDnsServer();
         server.RegisterRecord("bocchi.internal", IPAddress.Parse("10.99.0.1"));
@@ -40,10 +41,32 @@ public class InternalDnsServerTests
         var query = BuildQueryPacket("unknown.internal");
         var response = server.HandleDnsQuery(query);
 
-        Assert.Null(response);
+        Assert.NotNull(response);
+        // Flags: 0x8183 = NXDOMAIN
+        Assert.Equal(0x81, response[2]);
+        Assert.Equal(0x83, response[3]);
+        // Answer count = 0
+        Assert.Equal(0x00, response[7]);
     }
 
-    private static byte[] BuildQueryPacket(string domain)
+    [Fact]
+    public async Task HandleDnsQuery_ReturnsEmptyNoError_ForAaaaQuery()
+    {
+        await using var server = new InternalDnsServer();
+        server.RegisterRecord("bocchi.internal", IPAddress.Parse("10.99.0.1"));
+
+        var query = BuildQueryPacket("bocchi.internal", qtype: 28); // 28 = AAAA
+        var response = server.HandleDnsQuery(query);
+
+        Assert.NotNull(response);
+        // Flags: 0x8180 = NOERROR
+        Assert.Equal(0x81, response[2]);
+        Assert.Equal(0x80, response[3]);
+        // Answer count = 0
+        Assert.Equal(0x00, response[7]);
+    }
+
+    private static byte[] BuildQueryPacket(string domain, ushort qtype = 1)
     {
         var buffer = new List<byte>
         {
@@ -59,12 +82,12 @@ public class InternalDnsServerTests
         foreach (var label in labels)
         {
             buffer.Add((byte)label.Length);
-            buffer.AddRange(System.Text.Encoding.ASCII.GetBytes(label));
+            buffer.AddRange(Encoding.ASCII.GetBytes(label));
         }
         buffer.Add(0x00); // End of name
 
-        buffer.Add(0x00);
-        buffer.Add(0x01); // QTYPE: A (0x0001)
+        buffer.Add((byte)(qtype >> 8));
+        buffer.Add((byte)(qtype & 0xFF)); // QTYPE
 
         buffer.Add(0x00);
         buffer.Add(0x01); // QCLASS: IN (0x0001)
