@@ -1,0 +1,184 @@
+/**
+ * STARRY Documentation Theme Custom Styles
+ * Brand colors: Golden yellow (#f59e0b, #fbbf24, #d97706)
+ */
+
+:root {
+  /* Brand color palette */
+  --vp-c-brand-1: #f59e0b;
+  --vp-c-brand-2: #fbbf24;
+  --vp-c-brand-3: #d97706;
+  --vp-c-brand-soft: rgba(245, 158, 11, 0.14);
+
+  /* Light theme accents */
+  --vp-home-hero-name-color: transparent;
+  --vp-home-hero-name-background: -webkit-linear-gradient(135deg, #d97706 0%, #f59e0b 50%, #fbbf24 100%);
+  --vp-home-hero-image-background-image: radial-gradient(circle, rgba(245, 158, 11, 0.28) 0%, rgba(251, 191, 36, 0.08) 60%, transparent 80%);
+  --vp-home-hero-image-filter: blur(48px);
+
+  /* Starry custom badge colors */
+  --starry-badge-bg: rgba(245, 158, 11, 0.12);
+  --starry-badge-border: rgba(245, 158, 11, 0.35);
+  --starry-badge-text: #b45309;
+}
+
+/* Dark mode overrides */
+.dark {
+  /* Deep sleek slate-obsidian backgrounds */
+  --vp-c-bg: #0b0f19;
+  --vp-c-bg-soft: #111827;
+  --vp-c-bg-alt: #080b12;
+  --vp-c-bg-elv: #1a2234;
+  --vp-c-border: #1f293d;
+  --vp-c-gutter: #111827;
+
+  /* Radiant golden yellow brand in dark mode */
+  --vp-c-brand-1: #fbbf24;
+  --vp-c-brand-2: #f59e0b;
+  --vp-c-brand-3: #fde68a;
+  --vp-c-brand-soft: rgba(251, 191, 36, 0.16);
+
+  --vp-home-hero-name-background: -webkit-linear-gradient(135deg, #fef3c7 0%, #fbbf24 45%, #f59e0b 90%);
+  --vp-home-hero-image-background-image: radial-gradient(circle, rgba(251, 191, 36, 0.25) 0%, rgba(245, 158, 11, 0.10) 50%, transparent 75%);
+  --vp-home-hero-image-filter: blur(56px);
+
+  --starry-badge-bg: rgba(251, 191, 36, 0.15);
+  --starry-badge-border: rgba(251, 191, 36, 0.4);
+  --starry-badge-text: #fde68a;
+}
+
+/* Hero Section Custom Polish */
+.VPHero .name {
+  letter-spacing: -0.02em;
+  font-weight: 800;
+}
+
+.VPHero .text {
+  font-weight: 600;
+  color: var(--vp-c-text-1);
+}
+
+.VPHero .tagline {
+  color: var(--vp-c-text-2);
+  font-size: 1.25rem;
+  line-height: 1.6;
+}
+
+/* Brand Button Styling */
+.VPButton.brand {
+  background-color: var(--vp-c-brand-1) !important;
+  border-color: var(--vp-c-brand-1) !important;
+  color: #0b0f19 !important;
+  font-weight: 600;
+  box-shadow: 0 4px 14px 0 rgba(245, 158, 11, 0.35);
+  transition: all 0.25s ease;
+}
+
+.VPButton.brand:hover {
+  background-color: var(--vp-c-brand-2) !important;
+  border-color: var(--vp-c-brand-2) !important;
+  box-shadow: 0 6px 20px 0 rgba(245, 158, 11, 0.5);
+  transform: translateY(-1px);
+}
+
+.VPButton.alt {
+  border-color: var(--vp-c-border) !important;
+  transition: all 0.25s ease;
+}
+
+.VPButton.alt:hover {
+  border-color: var(--vp-c-brand-1) !important;
+  color: var(--vp-c-brand-1) !important;
+}
+
+/* Feature Cards Interactive Hover */
+.VPFeature {
+  border: 1px solid var(--vp-c-border);
+  transition: transform 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease;
+  border-radius: 12px;
+}
+
+.VPFeature:hover {
+  border-color: rgba(245, 158, 11, 0.45);
+  box-shadow: 0 8px 24px -4px rgba(245, 158, 11, 0.12);
+  transform: translateY(-2px);
+}
+
+.VPFeature .icon {
+  background-color: var(--vp-c-brand-soft);
+  border-radius: 10px;
+}
+
+/* Badge Customizations */
+.VPBadge {
+  font-family: var(--vp-font-family-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  display: inline-flex;
+  align-items: center;
+  line-height: 1.4;
+  vertical-align: middle;
+}
+
+.VPBadge.tip,
+.VPBadge.info {
+  background-color: var(--vp-c-brand-soft);
+  border: 1px solid var(--vp-c-brand-1);
+  color: var(--vp-c-brand-1);
+}
+
+.VPBadge.starry {
+  background-color: var(--starry-badge-bg);
+  border: 1px solid var(--starry-badge-border);
+  color: var(--starry-badge-text);
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.2);
+}
+
+/* Code block & inline code polish */
+code {
+  font-size: 0.9em;
+}
+
+:not(pre) > code {
+  background-color: var(--vp-c-brand-soft);
+  color: var(--vp-c-brand-1);
+  border-radius: 4px;
+  padding: 0.15em 0.4em;
+}
+
+/* Table styling */
+.vp-doc table {
+  border-collapse: separate;
+  border-spacing: 0;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--vp-c-border);
+}
+
+.vp-doc th {
+  background-color: var(--vp-c-bg-soft);
+  color: var(--vp-c-text-1);
+  font-weight: 600;
+}
+
+/* Custom Callout Box (starry-callout) */
+.starry-callout {
+  padding: 16px 20px;
+  margin: 16px 0;
+  border-radius: 8px;
+  border-left: 4px solid var(--vp-c-brand-1);
+  background-color: var(--vp-c-brand-soft);
+  color: var(--vp-c-text-1);
+}
+
+.starry-callout-title {
+  font-weight: 700;
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--vp-c-brand-1);
+}

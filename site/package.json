@@ -1,0 +1,14 @@
+{
+  "name": "starry-docs",
+  "version": "1.0.0",
+  "description": "Documentation for Starry - Decentralized GitOps Orchestrator",
+  "private": true,
+  "scripts": {
+    "docs:dev": "vitepress dev",
+    "docs:build": "vitepress build",
+    "docs:preview": "vitepress preview"
+  },
+  "devDependencies": {
+    "vitepress": "^1.6.3"
+  }
+}
