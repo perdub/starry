@@ -44,7 +44,8 @@ public class ClusterMatrixFuzzerTests
             {
                 using var ms = new MemoryStream();
                 await stdinStream.CopyToAsync(ms, ct);
-                Volumes[command.Arguments.LastOrDefault() ?? "vol"] = ms.ToArray();
+                var key = command.Arguments.Count > 0 ? command.Arguments[^1] : "vol";
+                Volumes[key] = ms.ToArray();
             }
 
             if (stdoutStream != null)
@@ -215,7 +216,7 @@ public class ClusterMatrixFuzzerTests
 
         var mesh = WireGuardMeshService.GenerateMeshConfigurations(fleet);
         Assert.Equal(5, mesh.Count);
-        foreach (var (k, conf) in mesh)
+        foreach (var (_, conf) in mesh)
         {
             Assert.Contains("Address = 10.99.0.", conf, StringComparison.Ordinal);
         }
