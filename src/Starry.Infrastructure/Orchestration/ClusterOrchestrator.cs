@@ -420,7 +420,7 @@ public sealed partial class ClusterOrchestrator
         await sourceRuntime.StreamImagePeerToPeerAsync(sourceNode, targetNode, spec.Image, ct).ConfigureAwait(false);
 
         logger?.Invoke($"[Blue-Green Step 2/6] Volume Synchronization: rsync over WireGuard from '{sourceNode.NodeName}' to '{targetNode.NodeName}'...");
-        await SyncServiceVolumesAsync(sourceNode, targetNode, targetNodeObj, spec.Volumes, logger, ct).ConfigureAwait(false);
+        await SyncServiceVolumesAsync(sourceNode, targetNode, spec.Volumes, logger, ct).ConfigureAwait(false);
 
         logger?.Invoke($"[Blue-Green Step 3/6] Starting Green container '{spec.Name}' on target node '{targetNode.NodeName}'...");
         await targetRuntime.DeployContainerAsync(targetNode, spec, ct).ConfigureAwait(false);
@@ -697,7 +697,6 @@ public sealed partial class ClusterOrchestrator
     private static async Task SyncServiceVolumesAsync(
         INodeConnection sourceNode,
         INodeConnection targetNode,
-        JsonObject? targetNodeObj,
         IReadOnlyList<string> volumes,
         Action<string>? logger,
         CancellationToken ct)

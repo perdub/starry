@@ -144,20 +144,7 @@ public abstract class BaseSocketContainerRuntime : IContainerRuntime
 
         if (existing != null)
         {
-            if (existing.IsRunning && filesChanged)
-            {
-                // Send SIGHUP for hot configuration reload
-                await SendSignalAsync(client, existing.Id, "SIGHUP", ct).ConfigureAwait(false);
-                return;
-            }
-
-            if (existing.IsRunning)
-            {
-                return; // Already desired state
-            }
-
-            // Start existing stopped container
-            await StartContainerAsync(client, existing.Id, ct).ConfigureAwait(false);
+            await ReconcileExistingContainerAsync(client, existing, filesChanged, ct).ConfigureAwait(false);
             return;
         }
 
@@ -189,6 +176,20 @@ public abstract class BaseSocketContainerRuntime : IContainerRuntime
         var containerId = createJson?["Id"]?.ToString() ?? throw new InvalidOperationException("Failed to get created container Id.");
 
         await StartContainerAsync(client, containerId, ct).ConfigureAwait(false);
+    }
+
+    private static async Task ReconcileExistingContainerAsync(HttpClient client, ContainerState existing, bool filesChanged, CancellationToken ct)
+    {
+        if (existing.IsRunning && filesChanged)
+        {
+            await SendSignalAsync(client, existing.Id, "SIGHUP", ct).ConfigureAwait(false);
+            return;
+        }
+
+        if (!existing.IsRunning)
+        {
+            await StartContainerAsync(client, existing.Id, ct).ConfigureAwait(false);
+        }
     }
 
     public async Task StreamImagePeerToPeerAsync(

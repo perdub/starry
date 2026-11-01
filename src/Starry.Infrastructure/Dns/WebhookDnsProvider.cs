@@ -71,7 +71,7 @@ public sealed class WebhookDnsProvider : IDnsProvider
 
         for (var attempt = 0; attempt <= delays.Length; attempt++)
         {
-            var content = new StringContent(jsonPayload, System.Text.Encoding.UTF8, "application/json");
+            using var content = new StringContent(jsonPayload, System.Text.Encoding.UTF8, "application/json");
             try
             {
                 var response = await _httpClient.PostAsync(_webhookUri, content, ct).ConfigureAwait(false);
