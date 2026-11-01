@@ -25,6 +25,7 @@ export default defineConfig({
             text: 'Руководство',
             items: [
               { text: 'Быстрый старт', link: '/guide/getting-started' },
+              { text: 'Docker и Podman (files)', link: '/guide/containers-docker-podman' },
               { text: 'Сетевой меш и VIP', link: '/guide/network-mesh-vips' },
               { text: 'Дистрибутивы Linux и NAT', link: '/guide/linux-distributions' },
               { text: 'Безопасность и секреты', link: '/guide/security-cryptography' }
@@ -81,6 +82,7 @@ export default defineConfig({
             text: 'Guide',
             items: [
               { text: 'Getting Started', link: '/en/guide/getting-started' },
+              { text: 'Docker & Podman (files)', link: '/en/guide/containers-docker-podman' },
               { text: 'WireGuard Mesh & VIPs', link: '/en/guide/network-mesh-vips' },
               { text: 'Linux Distros & NAT', link: '/en/guide/linux-distributions' },
               { text: 'Security & Secrets', link: '/en/guide/security-cryptography' }
