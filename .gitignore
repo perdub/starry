@@ -6,6 +6,9 @@
 [Oo]bj/
 [Ll]og/
 [Ll]ogs/
+nupkg/
+*.nupkg
+
 
 # .NET / Rider / Visual Studio
 .vs/

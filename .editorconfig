@@ -1,0 +1,37 @@
+# EditorConfig for Starry
+root = true
+
+[*]
+indent_style = space
+indent_size = 4
+end_of_line = lf
+charset = utf-8
+trim_trailing_whitespace = true
+insert_final_newline = true
+
+[*.cs]
+# Code style rules
+csharp_style_namespace_declarations = file_scoped:warning
+csharp_style_expression_bodied_methods = when_on_single_line:suggestion
+csharp_style_expression_bodied_properties = true:suggestion
+dotnet_style_qualification_for_field = false:suggestion
+dotnet_style_qualification_for_property = false:suggestion
+dotnet_style_qualification_for_method = false:suggestion
+dotnet_style_qualification_for_event = false:suggestion
+
+# CA1303 - Do not pass literals as localized parameters (allow in tests, enforce elsewhere)
+dotnet_diagnostic.CA1303.severity = suggestion
+# CA2007 - Consider calling ConfigureAwait on the awaited task (for CLI/Core apps)
+dotnet_diagnostic.CA2007.severity = none
+# MA0004 - Use Task.ConfigureAwait(false)
+dotnet_diagnostic.MA0004.severity = none
+# MA0016 - Prefer return collection abstraction
+dotnet_diagnostic.MA0016.severity = suggestion
+# MA0048 - File name must match type name
+dotnet_diagnostic.MA0048.severity = warning
+
+[tests/**.cs]
+dotnet_diagnostic.CA1707.severity = none
+dotnet_diagnostic.CA1303.severity = none
+dotnet_diagnostic.MA0051.severity = none
+dotnet_diagnostic.S2699.severity = none

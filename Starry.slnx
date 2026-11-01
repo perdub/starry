@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Starry.Cli/Starry.Cli.csproj" />
+    <Project Path="src/Starry.Core/Starry.Core.csproj" />
+    <Project Path="src/Starry.Infrastructure/Starry.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Starry.ChaosTests/Starry.ChaosTests.csproj" />
+    <Project Path="tests/Starry.E2ETests/Starry.E2ETests.csproj" />
+    <Project Path="tests/Starry.UnitTests/Starry.UnitTests.csproj" />
+  </Folder>
+</Solution>

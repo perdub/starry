@@ -1,0 +1,38 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Starry.Cli</RootNamespace>
+    <AssemblyName>starry</AssemblyName>
+
+    <!-- NuGet Tool Packaging -->
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>starry</ToolCommandName>
+    <PackageId>Starry.Cli</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>perdub</Authors>
+    <Company>STARRY</Company>
+    <Description>Decentralized GitOps orchestrator for Docker, Podman, WireGuard, nftables, and VPS fleet.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/perdub/starry</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/perdub/starry</RepositoryUrl>
+
+    <!-- Native AOT Compatibility -->
+    <PublishAot>false</PublishAot>
+    <PublishAot Condition="'$(PublishAotEnabled)' == 'true'">true</PublishAot>
+    <InvariantGlobalization>false</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Starry.Core\Starry.Core.csproj" />
+    <ProjectReference Include="..\Starry.Infrastructure\Starry.Infrastructure.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Spectre.Console" Version="0.49.1" />
+  </ItemGroup>
+
+</Project>
