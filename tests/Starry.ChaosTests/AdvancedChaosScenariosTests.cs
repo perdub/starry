@@ -46,6 +46,44 @@ public class AdvancedChaosScenariosTests
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
+    private sealed class MockSuccessNodeConnection(string nodeName) : INodeConnection
+    {
+        public string NodeName => nodeName;
+        public string Host => "198.51.100.10";
+        public int Port => 22;
+        public string? DistroId => "ubuntu";
+
+        public Task<ProcessResult> ExecuteCommandAsync(ProcessSpec command, CancellationToken ct = default)
+        {
+            return Task.FromResult(new ProcessResult(0, "success", string.Empty, TimeSpan.Zero));
+        }
+
+        public Task<ProcessResult> ExecuteStreamingCommandAsync(ProcessSpec command, Stream? stdinStream, Stream? stdoutStream, CancellationToken ct = default)
+        {
+            return Task.FromResult(new ProcessResult(0, "success", string.Empty, TimeSpan.Zero));
+        }
+
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope", Justification = "HttpClient owns handler")]
+        public Task<HttpClient> CreateSocketHttpClientAsync(string socketPath, CancellationToken ct = default)
+        {
+            var handler = new MockSuccessHttpMessageHandler();
+            return Task.FromResult(new HttpClient(handler, disposeHandler: true));
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class MockSuccessHttpMessageHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"Id\":\"mock-container-id\",\"State\":\"running\",\"Status\":\"Up\"}", Encoding.UTF8, "application/json")
+            });
+        }
+    }
+
     [Fact]
     public async Task Chaos1_MidMigrationSshDrop_AbortsWithoutCuttingOverDnsOrStoppingSource()
     {
@@ -61,7 +99,7 @@ public class AdvancedChaosScenariosTests
 
         // Target node suffers mid-migration SSH disconnect (IOException)
         await using var failingTargetNode = new MockFailingNodeConnection("nijika", new IOException("Connection dropped mid-transfer"));
-        await using var sourceNode = new LocalNodeConnection("bocchi");
+        await using var sourceNode = new MockSuccessNodeConnection("bocchi");
 
         var orchestrator = new ClusterOrchestrator();
         var loggedSteps = new List<string>();
