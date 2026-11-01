@@ -30,6 +30,9 @@ dotnet_diagnostic.MA0016.severity = suggestion
 # MA0048 - File name must match type name
 dotnet_diagnostic.MA0048.severity = warning
 
+[src/Starry.Cli/**.cs]
+dotnet_diagnostic.CA1031.severity = none
+
 [tests/**.cs]
 dotnet_diagnostic.CA1707.severity = none
 dotnet_diagnostic.CA1303.severity = none

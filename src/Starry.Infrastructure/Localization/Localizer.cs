@@ -24,6 +24,9 @@ public sealed class Localizer : ILocalizer
         [LocalizationKeys.ConfigSplitDescription] = "Split single bundle configuration into modular directory hierarchy",
         [LocalizationKeys.ConfigFmtDescription] = "Format configuration files canonically",
         [LocalizationKeys.ConfigSchemaDescription] = "Generate JSON Schema for Starry configuration",
+        [LocalizationKeys.ConfigPackSuccess] = "Successfully packed configuration into '{0}'.",
+        [LocalizationKeys.ConfigSplitSuccess] = "Successfully split configuration into '{0}'.",
+        [LocalizationKeys.ConfigFmtSuccess] = "Formatted '{0}' successfully.",
 
         [LocalizationKeys.EncryptCommandDescription] = "Manage secret encryption and key rotation",
         [LocalizationKeys.EncryptGlobalDescription] = "Re-encrypt all secrets across configuration with a new master key",
@@ -60,6 +63,9 @@ public sealed class Localizer : ILocalizer
         [LocalizationKeys.ConfigSplitDescription] = "Разбить единую конфигурацию на модульную иерархию папок и файлов",
         [LocalizationKeys.ConfigFmtDescription] = "Канонически отформатировать файлы конфигурации",
         [LocalizationKeys.ConfigSchemaDescription] = "Сгенерировать JSON Schema для конфигурации Starry",
+        [LocalizationKeys.ConfigPackSuccess] = "Конфигурация успешно упакована в '{0}'.",
+        [LocalizationKeys.ConfigSplitSuccess] = "Конфигурация успешно разделена в папку '{0}'.",
+        [LocalizationKeys.ConfigFmtSuccess] = "Файл '{0}' успешно канонически отформатирован.",
 
         [LocalizationKeys.EncryptCommandDescription] = "Управление шифрованием секретов и ротацией ключей",
         [LocalizationKeys.EncryptGlobalDescription] = "Перешифровать все секреты в конфигурации новым мастер-ключом",

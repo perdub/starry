@@ -1,6 +1,7 @@
 ﻿using System.Reflection;
 using Spectre.Console;
 using Starry.Core.Localization;
+using Starry.Infrastructure.Configuration;
 using Starry.Infrastructure.Localization;
 
 namespace Starry.Cli;
@@ -91,7 +92,11 @@ internal static class Program
             .AddColumn("[bold yellow]Command[/]")
             .AddColumn("[bold yellow]Description[/]");
 
-        table.AddRow("[cyan]config[/]", localizer.GetString(LocalizationKeys.ConfigCommandDescription));
+        table.AddRow("[cyan]config validate[/]", localizer.GetString(LocalizationKeys.ConfigValidateDescription));
+        table.AddRow("[cyan]config pack[/]", localizer.GetString(LocalizationKeys.ConfigPackDescription));
+        table.AddRow("[cyan]config split[/]", localizer.GetString(LocalizationKeys.ConfigSplitDescription));
+        table.AddRow("[cyan]config fmt[/]", localizer.GetString(LocalizationKeys.ConfigFmtDescription));
+        table.AddRow("[cyan]config schema[/]", localizer.GetString(LocalizationKeys.ConfigSchemaDescription));
         table.AddRow("[cyan]encrypt[/]", localizer.GetString(LocalizationKeys.EncryptCommandDescription));
         table.AddRow("[cyan]nodes[/]", localizer.GetString(LocalizationKeys.NodesCommandDescription));
         table.AddRow("[cyan]plan[/]", localizer.GetString(LocalizationKeys.PlanCommandDescription));
@@ -157,8 +162,187 @@ internal static class Program
     private static Task<int> HandleConfigCommand(string[] args, ILocalizer localizer)
     {
         var subCommand = args.Length > 0 ? args[0] : "validate";
-        AnsiConsole.MarkupLine($"[yellow]starry config {Markup.Escape(subCommand)}[/] - [grey]{Markup.Escape(localizer.GetString(LocalizationKeys.ConfigCommandDescription))}[/]");
-        return Task.FromResult(0);
+        var subArgs = args.Length > 1 ? args[1..] : Array.Empty<string>();
+
+        if (string.Equals(subCommand, "validate", StringComparison.OrdinalIgnoreCase))
+        {
+            return Task.FromResult(ExecuteConfigValidate(subArgs, localizer));
+        }
+
+        if (string.Equals(subCommand, "pack", StringComparison.OrdinalIgnoreCase))
+        {
+            return Task.FromResult(ExecuteConfigPack(subArgs, localizer));
+        }
+
+        if (string.Equals(subCommand, "split", StringComparison.OrdinalIgnoreCase))
+        {
+            return Task.FromResult(ExecuteConfigSplit(subArgs, localizer));
+        }
+
+        if (string.Equals(subCommand, "fmt", StringComparison.OrdinalIgnoreCase))
+        {
+            return Task.FromResult(ExecuteConfigFmt(subArgs, localizer));
+        }
+
+        if (string.Equals(subCommand, "schema", StringComparison.OrdinalIgnoreCase))
+        {
+            Console.WriteLine(VirtualConfigEngine.GenerateJsonSchema());
+            return Task.FromResult(0);
+        }
+
+        AnsiConsole.MarkupLine($"[red]Unknown config subcommand: '{Markup.Escape(subCommand)}'[/]");
+        return Task.FromResult(1);
+    }
+
+    private static int ExecuteConfigValidate(string[] args, ILocalizer localizer)
+    {
+        var targetPath = args.Length > 0 ? args[0] : ".";
+        try
+        {
+            var engine = new VirtualConfigEngine();
+            var tree = engine.Load(targetPath);
+            var result = ConfigValidator.Validate(tree);
+
+            if (result.IsValid && result.Issues.Count == 0)
+            {
+                AnsiConsole.MarkupLine($"[green]✓ {Markup.Escape(localizer.GetString(LocalizationKeys.ValidationSuccess))}[/]");
+                return 0;
+            }
+
+            var table = new Table().Border(TableBorder.Rounded);
+            table.AddColumn("[bold]Severity[/]");
+            table.AddColumn("[bold]Path[/]");
+            table.AddColumn("[bold]File[/]");
+            table.AddColumn("[bold]Message[/]");
+
+            foreach (var issue in result.Issues)
+            {
+                var severity = issue.IsWarning ? "[yellow]WARN[/]" : "[red]ERR[/]";
+                table.AddRow(severity, issue.Path, issue.FilePath ?? "-", Markup.Escape(issue.Message));
+            }
+
+            AnsiConsole.Write(table);
+
+            if (result.IsValid)
+            {
+                AnsiConsole.MarkupLine($"[green]✓ {Markup.Escape(localizer.GetString(LocalizationKeys.ValidationSuccess))} (with warnings)[/]");
+                return 0;
+            }
+
+            var errorCount = result.Issues.Count(i => !i.IsWarning);
+            AnsiConsole.MarkupLine($"[red]✗ {Markup.Escape(localizer.FormatString(LocalizationKeys.ValidationFailed, errorCount))}[/]");
+            return 1;
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]Validation error: {Markup.Escape(ex.Message)}[/]");
+            return 1;
+        }
+    }
+
+    private static int ExecuteConfigPack(string[] args, ILocalizer localizer)
+    {
+        var sourceDir = args.Length > 0 ? args[0] : ".";
+        var outputFile = "starry.packed.yaml";
+        var format = "yaml";
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            if (string.Equals(args[i], "-o", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+            {
+                outputFile = args[i + 1];
+            }
+            else if (string.Equals(args[i], "--format", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+            {
+                format = args[i + 1];
+            }
+        }
+
+        try
+        {
+            var engine = new VirtualConfigEngine();
+            var tree = engine.Load(sourceDir);
+            engine.Pack(tree, outputFile, format);
+            var msg = localizer.FormatString(LocalizationKeys.ConfigPackSuccess, outputFile);
+            AnsiConsole.MarkupLine($"[green]✓ {Markup.Escape(msg)}[/]");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]Pack error: {Markup.Escape(ex.Message)}[/]");
+            return 1;
+        }
+    }
+
+    private static int ExecuteConfigSplit(string[] args, ILocalizer localizer)
+    {
+        var sourceFile = args.Length > 0 ? args[0] : "starry.yaml";
+        var targetDir = "config";
+        var format = "yaml";
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            if (string.Equals(args[i], "-o", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+            {
+                targetDir = args[i + 1];
+            }
+            else if (string.Equals(args[i], "--format", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+            {
+                format = args[i + 1];
+            }
+        }
+
+        try
+        {
+            var engine = new VirtualConfigEngine();
+            var tree = engine.Load(sourceFile);
+            engine.Split(tree, targetDir, format);
+            var msg = localizer.FormatString(LocalizationKeys.ConfigSplitSuccess, targetDir);
+            AnsiConsole.MarkupLine($"[green]✓ {Markup.Escape(msg)}[/]");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]Split error: {Markup.Escape(ex.Message)}[/]");
+            return 1;
+        }
+    }
+
+    private static int ExecuteConfigFmt(string[] args, ILocalizer localizer)
+    {
+        if (args.Length == 0)
+        {
+            AnsiConsole.MarkupLine("[red]Usage: starry config fmt <file> [--format yaml|json|toml][/]");
+            return 1;
+        }
+
+        var filePath = args[0];
+        var format = "yaml";
+        var ext = Path.GetExtension(filePath);
+        if (string.Equals(ext, ".json", StringComparison.OrdinalIgnoreCase))
+        {
+            format = "json";
+        }
+        else if (string.Equals(ext, ".toml", StringComparison.OrdinalIgnoreCase))
+        {
+            format = "toml";
+        }
+
+        try
+        {
+            var engine = new VirtualConfigEngine();
+            var content = File.ReadAllText(filePath);
+            var formatted = engine.Format(content, format);
+            File.WriteAllText(filePath, formatted);
+            var msg = localizer.FormatString(LocalizationKeys.ConfigFmtSuccess, filePath);
+            AnsiConsole.MarkupLine($"[green]✓ {Markup.Escape(msg)}[/]");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]Format error: {Markup.Escape(ex.Message)}[/]");
+            return 1;
+        }
     }
 
     private static Task<int> HandleEncryptCommand(ILocalizer localizer)

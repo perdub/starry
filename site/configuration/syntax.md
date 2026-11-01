@@ -1,126 +1,156 @@
-# Синтаксис и схема конфигурации
+# Архитектура и синтаксис конфигурации
 
-Манифест `starry.yaml` является центральным декларативным описанием желаемого состояния вашего кластера.
+Starry использует передовую концепцию **Virtual Config Engine**: вы можете описывать инфраструктуру как единым файлом (`starry.yaml`), так и разбивать её на модульные папки и файлы любого удобного формата (**YAML**, **JSON**, **TOML**). Starry автоматически объединяет их в единое виртуальное дерево с полным сохранением карты источников (**Source Map**).
 
 ---
 
-## 1. Общая структура манифеста
+## 1. Модульная организация файлов (Best Practices)
+
+### Для небольших кластеров (Single File)
+Если у вас 1–3 сервера, удобно хранить всю конфигурацию в одном корневом файле:
+
+```text
+my-fleet/
+├── starry.yaml
+└── .gitignore
+```
+
+### Для средних и крупных флотов (Modular Hierarchy)
+При росте количества серверов и сервисов рекомендуется модульная структура:
+
+```text
+cluster/
+├── starry.yaml               # Общие настройки кластера и сети mesh
+├── nodes/
+│   ├── bocchi.yaml           # Нода bocchi -> root.nodes.bocchi
+│   ├── nijika.json           # Нода nijika -> root.nodes.nijika
+│   └── ryo.toml              # Нода ryo -> root.nodes.ryo
+└── services/
+    ├── api.yaml              # Сервис api -> root.services.api
+    ├── database.toml         # Сервис database -> root.services.database
+    └── frontend.json         # Сервис frontend -> root.services.frontend
+```
+
+Starry маппит относительные пути файлов в канонические JSON-пути виртуального дерева:
+- `nodes/bocchi.yaml` автоматически монтируется в `root.nodes.bocchi`
+- `services/api.toml` автоматически монтируется в `root.services.api`
+- Файлы `starry.yaml` или `config.yaml` в корне объединяются с корнем дерева `root`
+
+Каждое терминальное значение сохраняет точную ссылку на файл, строку и колонку в **Source Map**, благодаря чему ошибки валидации указывают на конкретные исходные файлы!
+
+---
+
+## 2. Поддержка форматов: YAML, JSON и TOML
+
+Вы можете свободно смешивать форматы в одном проекте! Ниже приведен один и тот же фрагмент конфигурации в трёх поддерживаемых форматах:
+
+::: code-group
+
+```yaml [YAML (nodes/bocchi.yaml)]
+host: "198.51.100.10"
+port: 22
+vpn_ip: "10.99.0.1"
+engine: "docker"
+packages:
+  - wireguard
+  - nftables
+  - curl
+```
+
+```toml [TOML (nodes/bocchi.toml)]
+host = "198.51.100.10"
+port = 22
+vpn_ip = "10.99.0.1"
+engine = "docker"
+packages = ["wireguard", "nftables", "curl"]
+```
+
+```json [JSON (nodes/bocchi.json)]
+{
+  "host": "198.51.100.10",
+  "port": 22,
+  "vpn_ip": "10.99.0.1",
+  "engine": "docker",
+  "packages": [
+    "wireguard",
+    "nftables",
+    "curl"
+  ]
+}
+```
+
+:::
+
+---
+
+## 3. Схема и структура кластера
+
+Манифест кластера описывает узлы (`nodes`), оверлейную сеть (`mesh`), развертываемые сервисы (`services`) и политики резервного копирования:
 
 ```yaml
 version: "1.0"
+cluster_name: "kessoku-prod"
 
-# Конфигурация оверлейной сети WireGuard
+# Параметры WireGuard Mesh оверлея
 mesh:
-  cidr: "10.42.0.0/16"
+  cidr: "10.99.0.0/16"
   port: 51820
   keepalive: 25
 
-# Описание серверных узлов (нод)
+# Серверные узлы кластера
 nodes:
-  app-01:
-    address: "203.0.113.10"
-    mesh_ip: "10.42.0.1"
-    ssh:
-      user: "root"
-      port: 22
-      key_path: "~/.ssh/id_ed25519"
-    engine: "docker"
-    packages:
-      - curl
-      - htop
-      - rsync
-    os_maintenance:
-      auto_security_updates: true
-      schedule: "@weekly"
-      reboot_policy: "rolling_drain"
+  bocchi:
+    host: "198.51.100.10"
+    port: 22
+    vpn_ip: "10.99.0.1"
+    is_public: true
+    ssh_key: "ENC[AES256_GCM:v1:nonce:cipher:tag]"
 
-# Описание развертываемых сервисов
+# Контейнерные сервисы
 services:
   web:
     image: "nginx:alpine"
-    node: "app-01"
-    restart: "always"
+    node: "bocchi"
+    priority: 80
     ports:
       - "80:80"
       - "443:443"
-    volumes:
-      - "/var/data/web:/usr/share/nginx/html:ro"
     env:
-      ENVIRONMENT: "production"
-      DATABASE_PASSWORD: "ENC[AES256_GCM,data:dXNlcjpwYXNz...,iv:9kP2...,tag:z0X8...]"
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost/ || exit 1"]
-      interval: 10s
-      timeout: 3s
-      retries: 3
+      DB_PASSWORD: "ENC[AES256_GCM:v1:nonce:cipher:tag]"
 ```
 
 ---
 
-## 2. Секция `mesh`
+## 4. Команды управления конфигурацией (CLI)
 
-Задает параметры полно-связной оверлейной сети WireGuard.
+Starry предоставляет богатый набор встроенных утилит для инспекции и трансформации конфигов:
 
-| Поле | Тип | По умолчанию | Описание |
-|---|---|---|---|
-| `cidr` | string | `10.42.0.0/16` | Подсеть для внутренней адресации нод и сервисов. |
-| `port` | integer | `51820` | UDP-порт WireGuard для входящих соединений. |
-| `keepalive` | integer | `25` | Интервал (в секундах) отправки keepalive пакетов для NAT-траверсала. |
-
----
-
-## 3. Секция `nodes`
-
-Каждый ключ в словаре `nodes` представляет собой уникальный идентификатор хоста.
-
-| Поле | Тип | Обязательное | Описание |
-|---|---|---|---|
-| `address` | string | Да | Публичный IPv4/IPv6 адрес или DNS-имя хоста. |
-| `mesh_ip` | string | Да | Статический IP-адрес узла в WireGuard-сети (из диапазона `mesh.cidr`). |
-| `engine` | string | Да | Контейнерный движок: `docker` или `podman`. |
-| `ssh.user` | string | Нет (def: `root`) | Пользователь для SSH-подключения. |
-| `ssh.port` | integer | Нет (def: `22`) | SSH-порт сервера. |
-| `ssh.key_path` | string | Нет | Путь к приватному SSH-ключу. |
-| `packages` | list | Нет | Список системных пакетов (`apt`, `dnf`, `apk`, `pacman`). |
-| `os_maintenance` | object | Нет | Политика автоматических обновлений ОС. |
-
-### Политика `os_maintenance`
-
-```yaml
-os_maintenance:
-  auto_security_updates: true # Автоматическая установка патчей безопасности
-  schedule: "@weekly"         # Расписание проверки (cron или @daily/@weekly)
-  reboot_policy: "rolling_drain" # Варианты: never | rolling_drain | immediate
+### Валидация (`starry config validate`)
+Проверяет структуру, существование обязательных полей, корректность сетевых адресов и синтаксис секретов:
+```bash
+starry config validate ./cluster
 ```
 
-- `never`: не выполнять перезагрузку автоматически, только уведомить оператора.
-- `rolling_drain`: последовательный дренаж трафика, перезагрузка и возврат в строй.
-- `immediate`: немедленная перезагрузка сразу после применения обновлений ядра.
-
----
-
-## 4. Секция `services`
-
-Описывает запускаемые контейнеры.
-
-| Поле | Тип | Описание |
-|---|---|---|
-| `image` | string | Образ контейнера (например, `redis:7-alpine`). |
-| `node` | string | Имя ноды из секции `nodes`, на которой запускается сервис. |
-| `ports` | list | Проброс портов в формате `"HOST:CONTAINER"`. Доступ строго ограничен WireGuard или обратным прокси. |
-| `volumes` | list | Монтирование томов в формате `"/host/path:/container/path[:ro]"`. |
-| `env` | map | Переменные окружения. Значения могут быть зашифрованы в формате `ENC[...]`. |
-| `restart` | string | Политика перезапуска: `always`, `on-failure`, `unless-stopped`, `no`. |
-| `healthcheck`| object | Параметры проверки работоспособности (`test`, `interval`, `timeout`, `retries`). |
-
----
-
-## 5. Формат зашифрованных значений (ENC)
-
-Чувствительные данные шифруются командой `starry secret encrypt` и сохраняются в формате:
-
-```text
-ENC[AES256_GCM,data:<base64-ciphertext>,iv:<base64-iv>,tag:<base64-tag>]
+### Упаковка в единый файл (`starry config pack`)
+Объединяет модульную директорию со всеми подпапками в один канонический файл:
+```bash
+starry config pack ./cluster -o starry.bundle.yaml --format yaml
 ```
 
-Starry расшифровывает такие строки исключительно в оперативной памяти непосредственно перед передачей в API контейнерного движка.
+### Разделение монолита на модули (`starry config split`)
+Автоматически разбивает монолитный `starry.yaml` на стандартную иерархию папок (`nodes/`, `services/`):
+```bash
+starry config split starry.bundle.yaml -o ./modular-config --format yaml
+```
+
+### Каноническое форматирование (`starry config fmt`)
+Форматирует конфигурационный файл в соответствии со стандартом:
+```bash
+starry config fmt cluster/nodes/bocchi.yaml
+```
+
+### Генерация JSON Schema (`starry config schema`)
+Генерирует официальную JSON Schema для валидации и автодополнения в VS Code, JetBrains Rider и Neovim:
+```bash
+starry config schema > starry.schema.json
+```

@@ -1,126 +1,156 @@
-# Configuration Syntax & Schema
+# Configuration Architecture & Syntax
 
-The `starry.yaml` manifest serves as the single source of truth describing your fleet's desired state.
+Starry leverages an advanced **Virtual Config Engine**: you can define your infrastructure as a single monolith file (`starry.yaml`) or break it down into modular directories and files across multiple formats (**YAML**, **JSON**, **TOML**). Starry seamlessly merges them into a virtual configuration tree while preserving exact source file coordinates (**Source Map**).
 
 ---
 
-## 1. Manifest Layout
+## 1. Modular Directory Organization (Best Practices)
+
+### For Small Fleets (Single File)
+For 1–3 servers, keeping everything in a single root file is simplest:
+
+```text
+my-fleet/
+├── starry.yaml
+└── .gitignore
+```
+
+### For Medium & Large Fleets (Modular Hierarchy)
+As your fleet grows with multiple nodes and services, a modular layout is recommended:
+
+```text
+cluster/
+├── starry.yaml               # Cluster global settings & mesh network
+├── nodes/
+│   ├── bocchi.yaml           # Node bocchi -> root.nodes.bocchi
+│   ├── nijika.json           # Node nijika -> root.nodes.nijika
+│   └── ryo.toml              # Node ryo -> root.nodes.ryo
+└── services/
+    ├── api.yaml              # Service api -> root.services.api
+    ├── database.toml         # Service database -> root.services.database
+    └── frontend.json         # Service frontend -> root.services.frontend
+```
+
+Starry automatically maps relative file paths to canonical JSON paths:
+- `nodes/bocchi.yaml` mounts to `root.nodes.bocchi`
+- `services/api.toml` mounts to `root.services.api`
+- Files named `starry.yaml` or `config.yaml` at root merge directly into `root`
+
+Every leaf property retains its exact file, line, and column reference in the **Source Map**, making validation and schema errors precise!
+
+---
+
+## 2. Multi-Format Support: YAML, JSON & TOML
+
+You can freely mix formats within a single project! Below is the same configuration snippet across all three supported formats:
+
+::: code-group
+
+```yaml [YAML (nodes/bocchi.yaml)]
+host: "198.51.100.10"
+port: 22
+vpn_ip: "10.99.0.1"
+engine: "docker"
+packages:
+  - wireguard
+  - nftables
+  - curl
+```
+
+```toml [TOML (nodes/bocchi.toml)]
+host = "198.51.100.10"
+port = 22
+vpn_ip = "10.99.0.1"
+engine = "docker"
+packages = ["wireguard", "nftables", "curl"]
+```
+
+```json [JSON (nodes/bocchi.json)]
+{
+  "host": "198.51.100.10",
+  "port": 22,
+  "vpn_ip": "10.99.0.1",
+  "engine": "docker",
+  "packages": [
+    "wireguard",
+    "nftables",
+    "curl"
+  ]
+}
+```
+
+:::
+
+---
+
+## 3. Cluster Schema & Spec
+
+The cluster manifest defines cluster nodes (`nodes`), overlay mesh network (`mesh`), container services (`services`), and backup policies:
 
 ```yaml
 version: "1.0"
+cluster_name: "kessoku-prod"
 
-# WireGuard overlay network settings
+# WireGuard Mesh network settings
 mesh:
-  cidr: "10.42.0.0/16"
+  cidr: "10.99.0.0/16"
   port: 51820
   keepalive: 25
 
-# Cluster host definitions
+# Cluster nodes
 nodes:
-  app-01:
-    address: "203.0.113.10"
-    mesh_ip: "10.42.0.1"
-    ssh:
-      user: "root"
-      port: 22
-      key_path: "~/.ssh/id_ed25519"
-    engine: "docker"
-    packages:
-      - curl
-      - htop
-      - rsync
-    os_maintenance:
-      auto_security_updates: true
-      schedule: "@weekly"
-      reboot_policy: "rolling_drain"
+  bocchi:
+    host: "198.51.100.10"
+    port: 22
+    vpn_ip: "10.99.0.1"
+    is_public: true
+    ssh_key: "ENC[AES256_GCM:v1:nonce:cipher:tag]"
 
-# Containerized workloads
+# Container services
 services:
   web:
     image: "nginx:alpine"
-    node: "app-01"
-    restart: "always"
+    node: "bocchi"
+    priority: 80
     ports:
       - "80:80"
       - "443:443"
-    volumes:
-      - "/var/data/web:/usr/share/nginx/html:ro"
     env:
-      ENVIRONMENT: "production"
-      DATABASE_PASSWORD: "ENC[AES256_GCM,data:dXNlcjpwYXNz...,iv:9kP2...,tag:z0X8...]"
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost/ || exit 1"]
-      interval: 10s
-      timeout: 3s
-      retries: 3
+      DB_PASSWORD: "ENC[AES256_GCM:v1:nonce:cipher:tag]"
 ```
 
 ---
 
-## 2. `mesh` Block
+## 4. Configuration Management Commands (CLI)
 
-Defines parameters for the encrypted WireGuard full-mesh overlay.
+Starry provides a suite of CLI tools for inspecting and transforming configs:
 
-| Key | Type | Default | Description |
-|---|---|---|---|
-| `cidr` | string | `10.42.0.0/16` | Subnet allocated for internal node and service communication. |
-| `port` | integer | `51820` | WireGuard UDP listen port on external interfaces. |
-| `keepalive` | integer | `25` | Interval in seconds for NAT traversal keepalive heartbeats. |
-
----
-
-## 3. `nodes` Block
-
-Each key maps to a unique server identifier.
-
-| Key | Type | Required | Description |
-|---|---|---|---|
-| `address` | string | Yes | Public IPv4/IPv6 address or fully-qualified domain name. |
-| `mesh_ip` | string | Yes | Static IP address within `mesh.cidr`. |
-| `engine` | string | Yes | Container engine: `docker` or `podman`. |
-| `ssh.user` | string | No (def: `root`) | Remote SSH user. |
-| `ssh.port` | integer | No (def: `22`) | SSH port. |
-| `ssh.key_path` | string | No | Path to Ed25519/RSA private key. |
-| `packages` | list | No | Host OS packages (`apt`, `dnf`, `apk`, `pacman`). |
-| `os_maintenance` | object | No | Automated security patching and reboot policy. |
-
-### `os_maintenance` Policy
-
-```yaml
-os_maintenance:
-  auto_security_updates: true # Apply upstream security patches automatically
-  schedule: "@weekly"         # Evaluation schedule (cron or @daily/@weekly)
-  reboot_policy: "rolling_drain" # Options: never | rolling_drain | immediate
+### Validation (`starry config validate`)
+Verifies schema constraints, required fields, network addresses, and encrypted secret syntax:
+```bash
+starry config validate ./cluster
 ```
 
-- `never`: Install updates but skip automated reboots.
-- `rolling_drain`: Graceful traffic rerouting, drain, host reboot, health verification, and traffic restore.
-- `immediate`: Reboot the host immediately after kernel package installation.
-
----
-
-## 4. `services` Block
-
-Defines application containers.
-
-| Key | Type | Description |
-|---|---|---|
-| `image` | string | Container image tag (e.g. `redis:7-alpine`). |
-| `node` | string | Target node key from the `nodes` block. |
-| `ports` | list | Port publishing `"HOST:CONTAINER"`. Isolated to WireGuard or reverse proxy. |
-| `volumes` | list | Volume bindings `"/host/path:/container/path[:ro]"`. |
-| `env` | map | Key-value environment variables. Supports `ENC[...]` secrets. |
-| `restart` | string | Restart policy: `always`, `on-failure`, `unless-stopped`, `no`. |
-| `healthcheck` | object | Healthcheck definition (`test`, `interval`, `timeout`, `retries`). |
-
----
-
-## 5. Encrypted Secret Tokens (ENC)
-
-Confidential secrets encrypted with `starry secret encrypt` follow this layout:
-
-```text
-ENC[AES256_GCM,data:<base64-ciphertext>,iv:<base64-iv>,tag:<base64-tag>]
+### Packing (`starry config pack`)
+Packs a modular directory hierarchy into a single bundle file:
+```bash
+starry config pack ./cluster -o starry.bundle.yaml --format yaml
 ```
 
-Starry decrypts values strictly in-memory immediately prior to dispatching container manifests to Docker/Podman APIs.
+### Splitting (`starry config split`)
+Splits a monolithic bundle back into standard modular folders (`nodes/`, `services/`):
+```bash
+starry config split starry.bundle.yaml -o ./modular-config --format yaml
+```
+
+### Canonical Formatting (`starry config fmt`)
+Formats config files cleanly according to canonical formatting rules:
+```bash
+starry config fmt cluster/nodes/bocchi.yaml
+```
+
+### JSON Schema Generation (`starry config schema`)
+Generates the official JSON Schema for IDE validation and autocompletion:
+```bash
+starry config schema > starry.schema.json
+```

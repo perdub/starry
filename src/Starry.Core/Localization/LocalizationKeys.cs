@@ -17,6 +17,9 @@ public static class LocalizationKeys
     public const string ConfigSplitDescription = "cmd.config.split.description";
     public const string ConfigFmtDescription = "cmd.config.fmt.description";
     public const string ConfigSchemaDescription = "cmd.config.schema.description";
+    public const string ConfigPackSuccess = "cmd.config.pack.success";
+    public const string ConfigSplitSuccess = "cmd.config.split.success";
+    public const string ConfigFmtSuccess = "cmd.config.fmt.success";
 
     public const string EncryptCommandDescription = "cmd.encrypt.description";
     public const string EncryptGlobalDescription = "cmd.encrypt.global.description";
