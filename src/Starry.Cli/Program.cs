@@ -950,6 +950,7 @@ internal static class Program
             }
 
             var service = new NodeOperationsService();
+            var orchestrator = new ClusterOrchestrator();
             AnsiConsole.MarkupLine($"[bold yellow]Starting rolling upgrade across {nodesObj.Count} node(s)...[/]");
 
             foreach (var (nodeName, nodeVal) in nodesObj)
@@ -959,21 +960,10 @@ internal static class Program
                     continue;
                 }
 
-                var host = nodeObj["host"]?.ToString() ?? "localhost";
-                var port = nodeObj.TryGetPropertyValue("port", out var pVal) && int.TryParse(pVal?.ToString(), CultureInfo.InvariantCulture, out var p) ? p : 22;
-                var user = nodeObj["user"]?.ToString() ?? "root";
-
-                var isLocal = string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase) || string.Equals(host, "127.0.0.1", StringComparison.Ordinal);
-                INodeConnection conn = isLocal
-                    ? new LocalNodeConnection(nodeName)
-                    : new SshNodeConnection(new SshNodeOptions { NodeName = nodeName, Host = host, Port = port, User = user });
-
-                await using (conn.ConfigureAwait(false))
-                {
-                    AnsiConsole.MarkupLine($"\n[cyan]=== Processing node '{Markup.Escape(nodeName)}' ({Markup.Escape(host)}) ===[/]");
-                    await service.UpgradeNodeAsync(conn, fullUpgrade, msg => AnsiConsole.MarkupLine($"[grey]  > {Markup.Escape(msg)}[/]")).ConfigureAwait(false);
-                    AnsiConsole.MarkupLine($"[green]✓ Node '{Markup.Escape(nodeName)}' updated successfully.[/]");
-                }
+                await using var conn = await orchestrator.ResolveNodeConnectionAsync(nodeName, nodeObj).ConfigureAwait(false);
+                AnsiConsole.MarkupLine($"\n[cyan]=== Processing node '{Markup.Escape(nodeName)}' ({Markup.Escape(conn.Host)}) ===[/]");
+                await service.UpgradeNodeAsync(conn, fullUpgrade, msg => AnsiConsole.MarkupLine($"[grey]  > {Markup.Escape(msg)}[/]")).ConfigureAwait(false);
+                AnsiConsole.MarkupLine($"[green]✓ Node '{Markup.Escape(nodeName)}' updated successfully.[/]");
             }
 
             AnsiConsole.MarkupLine("\n[bold green]✓ All nodes successfully upgraded![/]");
@@ -1013,6 +1003,16 @@ internal static class Program
                 ? [nodeName]
                 : nodesObj.Select(kv => kv.Key).ToList();
 
+            var masterKey = ResolveKeyFromArgsOrEnv(args, "--key", "STARRY_MASTER_KEY");
+            if (masterKey == null)
+            {
+                var newKeyStr = CryptoService.GenerateMasterKeyBase64();
+                masterKey = CryptoService.ParseMasterKey(newKeyStr);
+                AnsiConsole.MarkupLine($"[yellow]No master key specified. Generated STARRY_MASTER_KEY for rotated keys:[/] [bold green]{newKeyStr}[/]");
+            }
+
+            var secretManager = new SecretManager();
+
             foreach (var target in targets)
             {
                 if (nodesObj[target] is not JsonObject nodeObj)
@@ -1024,17 +1024,7 @@ internal static class Program
                 var newPrivateKey = await NodeOperationsService.RotateSshKeysAsync(conn, oldPubKey, msg => AnsiConsole.MarkupLine($"[grey]  > {Markup.Escape(msg)}[/]")).ConfigureAwait(false);
 
                 nodeObj["ssh_key"] = $"PLAIN[{newPrivateKey}]";
-            }
-
-            var masterKey = ResolveKeyFromArgsOrEnv(args, "--key", "STARRY_MASTER_KEY");
-            if (masterKey != null)
-            {
-                var secretManager = new SecretManager();
                 secretManager.EncryptOpenSecrets(tree, masterKey, configPath, engine);
-            }
-            else
-            {
-                engine.Pack(tree, configPath, "yaml");
             }
 
             AnsiConsole.MarkupLine($"[bold green]✓ Successfully rotated SSH keys for {targets.Count} node(s) and updated configuration![/]");
@@ -1193,10 +1183,11 @@ internal static class Program
                 await using var conn = await orchestrator.ResolveNodeConnectionAsync(nodeName, nodeObj).ConfigureAwait(false);
 
                 AnsiConsole.MarkupLine($"[bold yellow]Querying volume files for '[cyan]{Markup.Escape(volumePath)}[/]' on '[cyan]{Markup.Escape(nodeName)}[/]'...[/]");
+                var safeVol = "'" + volumePath.Replace("'", "'\\''") + "'";
                 var listResult = await conn.ExecuteCommandAsync(new ProcessSpec
                 {
                     Executable = "sh",
-                    Arguments = ["-c", $"ls -la '{volumePath}' 2>/dev/null || ls -la '/var/lib/docker/volumes/{volumePath}/_data' 2>/dev/null || echo 'Empty or not found'"]
+                    Arguments = ["-c", $"ls -la {safeVol} 2>/dev/null || ls -la /var/lib/docker/volumes/{safeVol}/_data 2>/dev/null || echo 'Empty or not found'"]
                 }).ConfigureAwait(false);
 
                 AnsiConsole.MarkupLine("[green]✓ Volume contents:[/]");

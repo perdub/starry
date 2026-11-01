@@ -149,7 +149,7 @@ public abstract class BaseSocketContainerRuntime : IContainerRuntime
         }
 
         // If VIP address is specified, ensure it is assigned to starry0 interface on the node
-        if (!string.IsNullOrEmpty(spec.VipAddress))
+        if (!string.IsNullOrEmpty(spec.VipAddress) && System.Net.IPAddress.TryParse(spec.VipAddress, out _))
         {
             await node.ExecuteCommandAsync(new ProcessSpec
             {

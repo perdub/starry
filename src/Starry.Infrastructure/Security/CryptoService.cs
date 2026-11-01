@@ -49,14 +49,12 @@ public sealed class CryptoService : ICryptoService
             throw new ArgumentException($"Master key must be exactly {KeySizeBytes} bytes (256 bits), got {key.Length} bytes.", nameof(key));
         }
 
-        ArgumentException.ThrowIfNullOrWhiteSpace(canonicalJsonPath);
-
         var nonce = Convert.FromBase64String(envelope.NonceBase64);
         var cipher = Convert.FromBase64String(envelope.CipherBase64);
         var tag = Convert.FromBase64String(envelope.TagBase64);
 
         var plaintext = new byte[cipher.Length];
-        var aad = Encoding.UTF8.GetBytes(canonicalJsonPath);
+        var aad = !string.IsNullOrEmpty(canonicalJsonPath) ? Encoding.UTF8.GetBytes(canonicalJsonPath) : [];
 
         using var aes = new AesGcm(key, TagSizeBytes);
         aes.Decrypt(nonce, cipher, tag, plaintext, aad);

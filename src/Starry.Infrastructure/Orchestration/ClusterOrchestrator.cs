@@ -78,19 +78,30 @@ public sealed partial class ClusterOrchestrator
 
         var resolvedNodes = new List<INodeConnection>(nodesObj.Count);
 
-        foreach (var (nodeName, nodeVal) in nodesObj)
+        try
         {
-            ct.ThrowIfCancellationRequested();
-            if (nodeVal is not JsonObject nodeObj)
+            foreach (var (nodeName, nodeVal) in nodesObj)
             {
-                continue;
+                ct.ThrowIfCancellationRequested();
+                if (nodeVal is not JsonObject nodeObj)
+                {
+                    continue;
+                }
+
+                var connection = await ResolveNodeConnectionAsync(nodeName, nodeObj, ct).ConfigureAwait(false);
+                resolvedNodes.Add(connection);
             }
 
-            var connection = await ResolveNodeConnectionAsync(nodeName, nodeObj, ct).ConfigureAwait(false);
-            resolvedNodes.Add(connection);
+            return resolvedNodes;
         }
-
-        return resolvedNodes;
+        catch
+        {
+            foreach (var conn in resolvedNodes)
+            {
+                await conn.DisposeAsync().ConfigureAwait(false);
+            }
+            throw;
+        }
     }
 
     /// <summary>
@@ -521,6 +532,14 @@ public sealed partial class ClusterOrchestrator
                     {
                         return match.Value;
                     }
+                    catch (FormatException)
+                    {
+                        return match.Value;
+                    }
+                    catch (ArgumentException)
+                    {
+                        return match.Value;
+                    }
                 }
                 return match.Value;
             });
@@ -723,7 +742,8 @@ public sealed partial class ClusterOrchestrator
 
             using var pipeStream = new MemoryStream();
 
-            var saveCmd = $"mkdir -p '{resolvedPath}' && tar -C '{resolvedPath}' -cf - . | zstd -3";
+            var safePath = "'" + resolvedPath.Replace("'", "'\\''") + "'";
+            var saveCmd = $"mkdir -p {safePath} && tar -C {safePath} -cf - . | zstd -3";
             var saveResult = await sourceNode.ExecuteStreamingCommandAsync(new ProcessSpec
             {
                 Executable = "sh",
@@ -737,7 +757,7 @@ public sealed partial class ClusterOrchestrator
             }
 
             pipeStream.Position = 0;
-            var restoreCmd = $"mkdir -p '{resolvedPath}' && zstd -d | tar -C '{resolvedPath}' -xf -";
+            var restoreCmd = $"mkdir -p {safePath} && zstd -d | tar -C {safePath} -xf -";
             var restoreResult = await targetNode.ExecuteStreamingCommandAsync(new ProcessSpec
             {
                 Executable = "sh",

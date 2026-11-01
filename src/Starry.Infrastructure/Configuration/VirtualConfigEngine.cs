@@ -126,9 +126,14 @@ public sealed class VirtualConfigEngine
         }
 
         var segments = rel.Split('/');
+        if (segments.Length > 0 && string.Equals(segments[0], "files", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
         return segments.Any(s =>
-            string.Equals(s, "files", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(s, ".starry", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(s, ".github", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(s, ".git", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(s, "node_modules", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(s, "dist", StringComparison.OrdinalIgnoreCase));

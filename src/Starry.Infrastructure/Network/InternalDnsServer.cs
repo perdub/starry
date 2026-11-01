@@ -82,7 +82,14 @@ public sealed class InternalDnsServer : IAsyncDisposable
 
         if (!_records.TryGetValue(domain, out var ip) || ip.AddressFamily != AddressFamily.InterNetwork)
         {
-            return BuildNxDomainResponse(queryBuffer);
+            // Only return NXDOMAIN for cluster-internal domains to avoid hijacking public internet resolution
+            if (domain.EndsWith(".internal", StringComparison.OrdinalIgnoreCase) ||
+                domain.EndsWith(".local", StringComparison.OrdinalIgnoreCase))
+            {
+                return BuildNxDomainResponse(queryBuffer);
+            }
+
+            return null;
         }
 
         if (qtype != 1) // 1 = A record. For AAAA (28) or others, return immediate NOERROR with 0 answers

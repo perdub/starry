@@ -3,8 +3,8 @@
 ## Overview
 
 - **Total Files**: 139
-- **Total Lines of Code**: 17852
-- **Total Size**: 670.4 KB
+- **Total Lines of Code**: 17944
+- **Total Size**: 673.9 KB
 - **Root Directory**: `/root/src/starry`
 
 ## Repository Structure
@@ -731,7 +731,7 @@ Licensed under the [MIT License](LICENSE).
 
 ## File: .github/workflows/ci-full-matrix.yml
 
-**Lines**: 139 | **Size**: 4.5 KB | **Language**: yaml
+**Lines**: 121 | **Size**: 3.9 KB | **Language**: yaml
 
 ```yaml
 name: Full Multi-Distro Matrix & Chaos CI
@@ -846,31 +846,13 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
-      - name: Run Shard 1 (Scenarios 1-6: 2-3 Node Clusters)
-        if: matrix.shard == 1
+      - name: Run Cluster Scenario Shard
         run: |
-          for i in $(seq 1 6); do
-            ./scripts/run-cluster-scenario.sh $i
-          done
-
-      - name: Run Shard 2 (Scenarios 7-12: 4-5 Node Multi-Tier & Kessoku Fleet)
-        if: matrix.shard == 2
-        run: |
-          for i in $(seq 7 12); do
-            ./scripts/run-cluster-scenario.sh $i
-          done
-
-      - name: Run Shard 3 (Scenarios 13-18: Live Chaos Engineering & Disruption)
-        if: matrix.shard == 3
-        run: |
-          for i in $(seq 13 18); do
-            ./scripts/run-cluster-scenario.sh $i
-          done
-
-      - name: Run Shard 4 (Scenarios 19-24: Brownfield Adoption & Zero-Downtime Attach)
-        if: matrix.shard == 4
-        run: |
-          for i in $(seq 19 24); do
+          SHARD=${{ matrix.shard }}
+          START=$(( (SHARD - 1) * 6 + 1 ))
+          END=$(( SHARD * 6 ))
+          echo "Running Shard $SHARD (Scenarios $START to $END)..."
+          for i in $(seq $START $END); do
             ./scripts/run-cluster-scenario.sh $i
           done
 ```
@@ -4826,7 +4808,7 @@ Starry управляет не только контейнерами, но и б
 
 ## File: site/cli/commands.md
 
-**Lines**: 161 | **Size**: 5.3 KB | **Language**: markdown
+**Lines**: 183 | **Size**: 6.5 KB | **Language**: markdown
 
 ````markdown
 # Справочник команд CLI
@@ -4965,30 +4947,52 @@ starry rotate-keys [--dry-run]
 
 ---
 
-## 6. Демон агента (`starry agent`)
+## 7. Захват существующих серверов (`starry adopt`)
 
-### `starry agent run`
+### `starry adopt`
 
-Запуск агента узла в текущем терминале.
+Подключается к работающему VPS по SSH, инспектирует запущенные контейнеры (Docker/Podman), выкачивает конфигурационные файлы (`--pull-files`), находит и шифрует секреты в `Env`, и генерирует готовую модульную структуру конфигурации Starry:
 
 ```bash
-starry agent run [--config /etc/starry/agent.yaml]
+starry adopt root@203.0.113.10:22 --pull-files --out-dir ./config --format yaml
 ```
 
-### `starry agent install-service`
+### `starry unmanaged list`
 
-Создает и регистрирует unit-файл `systemd` (`starry-agent.service`) в операционной системе.
+Опрашивает все подключенные ноды кластера и выводит список контейнеров, запущенных вручную и не находящихся под управлением Starry GitOps:
 
 ```bash
-sudo starry agent install-service
+starry unmanaged list [--config ./config]
 ```
 
-### `starry agent status`
+---
 
-Проверяет состояние локального агента, соединение с соседями по WireGuard и статус локальных контейнеров.
+## 8. Аварийное восстановление и тома
+
+### `starry volume open`
+
+Подключается к ноде и отображает структуру файлов тома или каталога данных:
 
 ```bash
-starry agent status
+starry volume open bocchi /var/data/postgres [--once]
+```
+
+### `starry bundle export`
+
+Выгружает всю конфигурацию кластера, зашифрованные секреты и метаданные в единый переносимый архив аварийного восстановления:
+
+```bash
+starry bundle export -o cluster-backup.tar.gz
+```
+
+### `starry bundle import`
+
+Восстанавливает архив кластера с возможностью переназначения IP-адресов нод на новые серверы:
+
+```bash
+starry bundle import cluster-backup.tar.gz -o ./new-cluster \
+  --override-ip bocchi=198.51.100.99 \
+  --override-ip nijika=198.51.100.100
 ```
 ````
 
@@ -5350,7 +5354,7 @@ Starry maintains both application containers and host OS packages:
 
 ## File: site/en/cli/commands.md
 
-**Lines**: 161 | **Size**: 3.5 KB | **Language**: markdown
+**Lines**: 211 | **Size**: 4.7 KB | **Language**: markdown
 
 ````markdown
 # CLI Command Reference
@@ -5513,6 +5517,56 @@ Inspects local agent health, mesh peer latency, and local container statuses.
 
 ```bash
 starry agent status
+```
+
+---
+
+## 7. Brownfield Host Adoption (`starry adopt`)
+
+### `starry adopt`
+
+Inspects an existing server over SSH, discovers running containers (Docker/Podman), downloads bind-mounted configuration files (`--pull-files`), scans and encrypts secrets in `Env`, and generates modular Starry configurations:
+
+```bash
+starry adopt root@203.0.113.10:22 --pull-files --out-dir ./config --format yaml
+```
+
+### `starry unmanaged list`
+
+Scans cluster nodes and lists all unmanaged / manually started containers not tracked in Starry GitOps:
+
+```bash
+starry unmanaged list [--config ./config]
+```
+
+---
+
+## 8. Disaster Recovery & Volumes
+
+### `starry volume open`
+
+Connects to a node and displays the file listing of a container volume or directory:
+
+```bash
+starry volume open bocchi /var/data/postgres [--once]
+```
+
+### `starry bundle export`
+
+Exports the entire cluster configuration, encrypted secrets, and metadata into a single disaster recovery capsule:
+
+```bash
+starry bundle export -o cluster-backup.tar.gz
+```
+
+### `starry bundle import`
+
+Restores a cluster capsule with optional IP address overrides for new host instances:
+
+```bash
+starry bundle import cluster-backup.tar.gz -o ./new-cluster \
+  --override-ip bocchi=198.51.100.99 \
+  --override-ip nijika=198.51.100.100
 ```
 ````
 
@@ -6933,7 +6987,7 @@ starry encrypt global --reencrypt \
 
 ## File: src/Starry.Cli/Program.cs
 
-**Lines**: 1313 | **Size**: 50.8 KB | **Language**: csharp
+**Lines**: 1304 | **Size**: 50.4 KB | **Language**: csharp
 
 ```csharp
 ﻿using System.Globalization;
@@ -7888,6 +7942,7 @@ internal static class Program
             }
 
             var service = new NodeOperationsService();
+            var orchestrator = new ClusterOrchestrator();
             AnsiConsole.MarkupLine($"[bold yellow]Starting rolling upgrade across {nodesObj.Count} node(s)...[/]");
 
             foreach (var (nodeName, nodeVal) in nodesObj)
@@ -7897,21 +7952,10 @@ internal static class Program
                     continue;
                 }
 
-                var host = nodeObj["host"]?.ToString() ?? "localhost";
-                var port = nodeObj.TryGetPropertyValue("port", out var pVal) && int.TryParse(pVal?.ToString(), CultureInfo.InvariantCulture, out var p) ? p : 22;
-                var user = nodeObj["user"]?.ToString() ?? "root";
-
-                var isLocal = string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase) || string.Equals(host, "127.0.0.1", StringComparison.Ordinal);
-                INodeConnection conn = isLocal
-                    ? new LocalNodeConnection(nodeName)
-                    : new SshNodeConnection(new SshNodeOptions { NodeName = nodeName, Host = host, Port = port, User = user });
-
-                await using (conn.ConfigureAwait(false))
-                {
-                    AnsiConsole.MarkupLine($"\n[cyan]=== Processing node '{Markup.Escape(nodeName)}' ({Markup.Escape(host)}) ===[/]");
-                    await service.UpgradeNodeAsync(conn, fullUpgrade, msg => AnsiConsole.MarkupLine($"[grey]  > {Markup.Escape(msg)}[/]")).ConfigureAwait(false);
-                    AnsiConsole.MarkupLine($"[green]✓ Node '{Markup.Escape(nodeName)}' updated successfully.[/]");
-                }
+                await using var conn = await orchestrator.ResolveNodeConnectionAsync(nodeName, nodeObj).ConfigureAwait(false);
+                AnsiConsole.MarkupLine($"\n[cyan]=== Processing node '{Markup.Escape(nodeName)}' ({Markup.Escape(conn.Host)}) ===[/]");
+                await service.UpgradeNodeAsync(conn, fullUpgrade, msg => AnsiConsole.MarkupLine($"[grey]  > {Markup.Escape(msg)}[/]")).ConfigureAwait(false);
+                AnsiConsole.MarkupLine($"[green]✓ Node '{Markup.Escape(nodeName)}' updated successfully.[/]");
             }
 
             AnsiConsole.MarkupLine("\n[bold green]✓ All nodes successfully upgraded![/]");
@@ -7951,6 +7995,16 @@ internal static class Program
                 ? [nodeName]
                 : nodesObj.Select(kv => kv.Key).ToList();
 
+            var masterKey = ResolveKeyFromArgsOrEnv(args, "--key", "STARRY_MASTER_KEY");
+            if (masterKey == null)
+            {
+                var newKeyStr = CryptoService.GenerateMasterKeyBase64();
+                masterKey = CryptoService.ParseMasterKey(newKeyStr);
+                AnsiConsole.MarkupLine($"[yellow]No master key specified. Generated STARRY_MASTER_KEY for rotated keys:[/] [bold green]{newKeyStr}[/]");
+            }
+
+            var secretManager = new SecretManager();
+
             foreach (var target in targets)
             {
                 if (nodesObj[target] is not JsonObject nodeObj)
@@ -7962,17 +8016,7 @@ internal static class Program
                 var newPrivateKey = await NodeOperationsService.RotateSshKeysAsync(conn, oldPubKey, msg => AnsiConsole.MarkupLine($"[grey]  > {Markup.Escape(msg)}[/]")).ConfigureAwait(false);
 
                 nodeObj["ssh_key"] = $"PLAIN[{newPrivateKey}]";
-            }
-
-            var masterKey = ResolveKeyFromArgsOrEnv(args, "--key", "STARRY_MASTER_KEY");
-            if (masterKey != null)
-            {
-                var secretManager = new SecretManager();
                 secretManager.EncryptOpenSecrets(tree, masterKey, configPath, engine);
-            }
-            else
-            {
-                engine.Pack(tree, configPath, "yaml");
             }
 
             AnsiConsole.MarkupLine($"[bold green]✓ Successfully rotated SSH keys for {targets.Count} node(s) and updated configuration![/]");
@@ -8131,10 +8175,11 @@ internal static class Program
                 await using var conn = await orchestrator.ResolveNodeConnectionAsync(nodeName, nodeObj).ConfigureAwait(false);
 
                 AnsiConsole.MarkupLine($"[bold yellow]Querying volume files for '[cyan]{Markup.Escape(volumePath)}[/]' on '[cyan]{Markup.Escape(nodeName)}[/]'...[/]");
+                var safeVol = "'" + volumePath.Replace("'", "'\\''") + "'";
                 var listResult = await conn.ExecuteCommandAsync(new ProcessSpec
                 {
                     Executable = "sh",
-                    Arguments = ["-c", $"ls -la '{volumePath}' 2>/dev/null || ls -la '/var/lib/docker/volumes/{volumePath}/_data' 2>/dev/null || echo 'Empty or not found'"]
+                    Arguments = ["-c", $"ls -la {safeVol} 2>/dev/null || ls -la /var/lib/docker/volumes/{safeVol}/_data 2>/dev/null || echo 'Empty or not found'"]
                 }).ConfigureAwait(false);
 
                 AnsiConsole.MarkupLine("[green]✓ Volume contents:[/]");
@@ -10435,7 +10480,7 @@ public sealed record ValidationIssue(
 
 ## File: src/Starry.Infrastructure/Configuration/VirtualConfigEngine.cs
 
-**Lines**: 313 | **Size**: 11.9 KB | **Language**: csharp
+**Lines**: 318 | **Size**: 12.1 KB | **Language**: csharp
 
 ```csharp
 using System.Text.Json;
@@ -10566,9 +10611,14 @@ public sealed class VirtualConfigEngine
         }
 
         var segments = rel.Split('/');
+        if (segments.Length > 0 && string.Equals(segments[0], "files", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
         return segments.Any(s =>
-            string.Equals(s, "files", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(s, ".starry", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(s, ".github", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(s, ".git", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(s, "node_modules", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(s, "dist", StringComparison.OrdinalIgnoreCase));
@@ -10909,7 +10959,7 @@ public sealed class YamlConfigFormatProvider : IConfigFormatProvider
 
 ## File: src/Starry.Infrastructure/Containers/BaseSocketContainerRuntime.cs
 
-**Lines**: 411 | **Size**: 15.6 KB | **Language**: csharp
+**Lines**: 412 | **Size**: 15.7 KB | **Language**: csharp
 
 ```csharp
 using System.Globalization;
@@ -11058,25 +11108,12 @@ public abstract class BaseSocketContainerRuntime : IContainerRuntime
 
         if (existing != null)
         {
-            if (existing.IsRunning && filesChanged)
-            {
-                // Send SIGHUP for hot configuration reload
-                await SendSignalAsync(client, existing.Id, "SIGHUP", ct).ConfigureAwait(false);
-                return;
-            }
-
-            if (existing.IsRunning)
-            {
-                return; // Already desired state
-            }
-
-            // Start existing stopped container
-            await StartContainerAsync(client, existing.Id, ct).ConfigureAwait(false);
+            await ReconcileExistingContainerAsync(client, existing, filesChanged, ct).ConfigureAwait(false);
             return;
         }
 
         // If VIP address is specified, ensure it is assigned to starry0 interface on the node
-        if (!string.IsNullOrEmpty(spec.VipAddress))
+        if (!string.IsNullOrEmpty(spec.VipAddress) && System.Net.IPAddress.TryParse(spec.VipAddress, out _))
         {
             await node.ExecuteCommandAsync(new ProcessSpec
             {
@@ -11103,6 +11140,20 @@ public abstract class BaseSocketContainerRuntime : IContainerRuntime
         var containerId = createJson?["Id"]?.ToString() ?? throw new InvalidOperationException("Failed to get created container Id.");
 
         await StartContainerAsync(client, containerId, ct).ConfigureAwait(false);
+    }
+
+    private static async Task ReconcileExistingContainerAsync(HttpClient client, ContainerState existing, bool filesChanged, CancellationToken ct)
+    {
+        if (existing.IsRunning && filesChanged)
+        {
+            await SendSignalAsync(client, existing.Id, "SIGHUP", ct).ConfigureAwait(false);
+            return;
+        }
+
+        if (!existing.IsRunning)
+        {
+            await StartContainerAsync(client, existing.Id, ct).ConfigureAwait(false);
+        }
     }
 
     public async Task StreamImagePeerToPeerAsync(
@@ -11699,7 +11750,7 @@ public sealed class WebhookDnsProvider : IDnsProvider
 
         for (var attempt = 0; attempt <= delays.Length; attempt++)
         {
-            var content = new StringContent(jsonPayload, System.Text.Encoding.UTF8, "application/json");
+            using var content = new StringContent(jsonPayload, System.Text.Encoding.UTF8, "application/json");
             try
             {
                 var response = await _httpClient.PostAsync(_webhookUri, content, ct).ConfigureAwait(false);
@@ -11891,7 +11942,7 @@ public sealed class Localizer : ILocalizer
 
 ## File: src/Starry.Infrastructure/Network/InternalDnsServer.cs
 
-**Lines**: 230 | **Size**: 6.4 KB | **Language**: csharp
+**Lines**: 237 | **Size**: 6.7 KB | **Language**: csharp
 
 ```csharp
 using System.Net;
@@ -11978,7 +12029,14 @@ public sealed class InternalDnsServer : IAsyncDisposable
 
         if (!_records.TryGetValue(domain, out var ip) || ip.AddressFamily != AddressFamily.InterNetwork)
         {
-            return BuildNxDomainResponse(queryBuffer);
+            // Only return NXDOMAIN for cluster-internal domains to avoid hijacking public internet resolution
+            if (domain.EndsWith(".internal", StringComparison.OrdinalIgnoreCase) ||
+                domain.EndsWith(".local", StringComparison.OrdinalIgnoreCase))
+            {
+                return BuildNxDomainResponse(queryBuffer);
+            }
+
+            return null;
         }
 
         if (qtype != 1) // 1 = A record. For AAAA (28) or others, return immediate NOERROR with 0 answers
@@ -12298,10 +12356,11 @@ public sealed record PortForwardRule(
 
 ## File: src/Starry.Infrastructure/Network/WireGuardMeshService.cs
 
-**Lines**: 119 | **Size**: 5.1 KB | **Language**: csharp
+**Lines**: 135 | **Size**: 5.8 KB | **Language**: csharp
 
 ```csharp
 using System.Globalization;
+using System.Net;
 using System.Text;
 using Starry.Core.Nodes;
 using Starry.Core.Processes;
@@ -12361,10 +12420,25 @@ public static class WireGuardMeshService
 
                 if (!string.IsNullOrEmpty(peerNode.Endpoint) && peerNode.IsPublic)
                 {
-                    var ep = peerNode.Endpoint.Contains(':', StringComparison.Ordinal)
-                ? peerNode.Endpoint
-                : $"{peerNode.Endpoint}:{peerNode.ListenPort}";
-            sb.AppendLine(CultureInfo.InvariantCulture, $"Endpoint = {ep}");
+                    string ep;
+                    if (peerNode.Endpoint.StartsWith('[') && peerNode.Endpoint.Contains("]:", StringComparison.Ordinal))
+                    {
+                        ep = peerNode.Endpoint;
+                    }
+                    else if (IPAddress.TryParse(peerNode.Endpoint, out var ip) && ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6)
+                    {
+                        ep = $"[{peerNode.Endpoint}]:{peerNode.ListenPort}";
+                    }
+                    else if (peerNode.Endpoint.Contains(':', StringComparison.Ordinal))
+                    {
+                        ep = peerNode.Endpoint;
+                    }
+                    else
+                    {
+                        ep = $"{peerNode.Endpoint}:{peerNode.ListenPort}";
+                    }
+
+                    sb.AppendLine(CultureInfo.InvariantCulture, $"Endpoint = {ep}");
                 }
 
                 sb.AppendLine(CultureInfo.InvariantCulture, $"PersistentKeepalive = {DefaultKeepalive}");
@@ -12400,11 +12474,11 @@ public static class WireGuardMeshService
         };
         await node.ExecuteCommandAsync(writeSpec, ct).ConfigureAwait(false);
 
-        // POSIX-compliant sync without bashism <(...)
+        // POSIX-compliant sync without bashism <(...) using secure mktemp
         var syncSpec = new ProcessSpec
         {
             Executable = "sh",
-            Arguments = ["-c", $"wg-quick strip {InterfaceName} > /tmp/{InterfaceName}.strip 2>/dev/null && wg syncconf {InterfaceName} /tmp/{InterfaceName}.strip 2>/dev/null && rm -f /tmp/{InterfaceName}.strip || (wg-quick down {InterfaceName} 2>/dev/null; wg-quick up {InterfaceName})"]
+            Arguments = ["-c", $"STRIP=$(mktemp /tmp/{InterfaceName}.XXXXXX 2>/dev/null || echo \"/tmp/{InterfaceName}.$$.strip\") && wg-quick strip {InterfaceName} > \"$STRIP\" 2>/dev/null && wg syncconf {InterfaceName} \"$STRIP\" 2>/dev/null; rm -f \"$STRIP\" || (wg-quick down {InterfaceName} 2>/dev/null; wg-quick up {InterfaceName})"]
         };
         var result = await node.ExecuteCommandAsync(syncSpec, ct).ConfigureAwait(false);
         if (!result.IsSuccess)
@@ -13094,7 +13168,7 @@ public sealed record SshNodeOptions
 
 ## File: src/Starry.Infrastructure/Orchestration/ClusterOrchestrator.cs
 
-**Lines**: 1398 | **Size**: 52.5 KB | **Language**: csharp
+**Lines**: 1417 | **Size**: 53.0 KB | **Language**: csharp
 
 ```csharp
 using System.Globalization;
@@ -13177,19 +13251,30 @@ public sealed partial class ClusterOrchestrator
 
         var resolvedNodes = new List<INodeConnection>(nodesObj.Count);
 
-        foreach (var (nodeName, nodeVal) in nodesObj)
+        try
         {
-            ct.ThrowIfCancellationRequested();
-            if (nodeVal is not JsonObject nodeObj)
+            foreach (var (nodeName, nodeVal) in nodesObj)
             {
-                continue;
+                ct.ThrowIfCancellationRequested();
+                if (nodeVal is not JsonObject nodeObj)
+                {
+                    continue;
+                }
+
+                var connection = await ResolveNodeConnectionAsync(nodeName, nodeObj, ct).ConfigureAwait(false);
+                resolvedNodes.Add(connection);
             }
 
-            var connection = await ResolveNodeConnectionAsync(nodeName, nodeObj, ct).ConfigureAwait(false);
-            resolvedNodes.Add(connection);
+            return resolvedNodes;
         }
-
-        return resolvedNodes;
+        catch
+        {
+            foreach (var conn in resolvedNodes)
+            {
+                await conn.DisposeAsync().ConfigureAwait(false);
+            }
+            throw;
+        }
     }
 
     /// <summary>
@@ -13519,7 +13604,7 @@ public sealed partial class ClusterOrchestrator
         await sourceRuntime.StreamImagePeerToPeerAsync(sourceNode, targetNode, spec.Image, ct).ConfigureAwait(false);
 
         logger?.Invoke($"[Blue-Green Step 2/6] Volume Synchronization: rsync over WireGuard from '{sourceNode.NodeName}' to '{targetNode.NodeName}'...");
-        await SyncServiceVolumesAsync(sourceNode, targetNode, targetNodeObj, spec.Volumes, logger, ct).ConfigureAwait(false);
+        await SyncServiceVolumesAsync(sourceNode, targetNode, spec.Volumes, logger, ct).ConfigureAwait(false);
 
         logger?.Invoke($"[Blue-Green Step 3/6] Starting Green container '{spec.Name}' on target node '{targetNode.NodeName}'...");
         await targetRuntime.DeployContainerAsync(targetNode, spec, ct).ConfigureAwait(false);
@@ -13617,6 +13702,14 @@ public sealed partial class ClusterOrchestrator
                         return Encoding.UTF8.GetString(bytes);
                     }
                     catch (CryptographicException)
+                    {
+                        return match.Value;
+                    }
+                    catch (FormatException)
+                    {
+                        return match.Value;
+                    }
+                    catch (ArgumentException)
                     {
                         return match.Value;
                     }
@@ -13796,7 +13889,6 @@ public sealed partial class ClusterOrchestrator
     private static async Task SyncServiceVolumesAsync(
         INodeConnection sourceNode,
         INodeConnection targetNode,
-        JsonObject? targetNodeObj,
         IReadOnlyList<string> volumes,
         Action<string>? logger,
         CancellationToken ct)
@@ -13823,7 +13915,8 @@ public sealed partial class ClusterOrchestrator
 
             using var pipeStream = new MemoryStream();
 
-            var saveCmd = $"mkdir -p '{resolvedPath}' && tar -C '{resolvedPath}' -cf - . | zstd -3";
+            var safePath = "'" + resolvedPath.Replace("'", "'\\''") + "'";
+            var saveCmd = $"mkdir -p {safePath} && tar -C {safePath} -cf - . | zstd -3";
             var saveResult = await sourceNode.ExecuteStreamingCommandAsync(new ProcessSpec
             {
                 Executable = "sh",
@@ -13837,7 +13930,7 @@ public sealed partial class ClusterOrchestrator
             }
 
             pipeStream.Position = 0;
-            var restoreCmd = $"mkdir -p '{resolvedPath}' && zstd -d | tar -C '{resolvedPath}' -xf -";
+            var restoreCmd = $"mkdir -p {safePath} && zstd -d | tar -C {safePath} -xf -";
             var restoreResult = await targetNode.ExecuteStreamingCommandAsync(new ProcessSpec
             {
                 Executable = "sh",
@@ -16358,7 +16451,7 @@ public sealed class ProcessRunner : IProcessRunner
 
 ## File: src/Starry.Infrastructure/Security/CryptoService.cs
 
-**Lines**: 124 | **Size**: 4.0 KB | **Language**: csharp
+**Lines**: 122 | **Size**: 4.0 KB | **Language**: csharp
 
 ```csharp
 using System.Security.Cryptography;
@@ -16412,14 +16505,12 @@ public sealed class CryptoService : ICryptoService
             throw new ArgumentException($"Master key must be exactly {KeySizeBytes} bytes (256 bits), got {key.Length} bytes.", nameof(key));
         }
 
-        ArgumentException.ThrowIfNullOrWhiteSpace(canonicalJsonPath);
-
         var nonce = Convert.FromBase64String(envelope.NonceBase64);
         var cipher = Convert.FromBase64String(envelope.CipherBase64);
         var tag = Convert.FromBase64String(envelope.TagBase64);
 
         var plaintext = new byte[cipher.Length];
-        var aad = Encoding.UTF8.GetBytes(canonicalJsonPath);
+        var aad = !string.IsNullOrEmpty(canonicalJsonPath) ? Encoding.UTF8.GetBytes(canonicalJsonPath) : [];
 
         using var aes = new AesGcm(key, TagSizeBytes);
         aes.Decrypt(nonce, cipher, tag, plaintext, aad);
@@ -17471,7 +17562,7 @@ public class ClusterEndToEndTests
 
 ## File: tests/Starry.E2ETests/ClusterMatrixFuzzerTests.cs
 
-**Lines**: 428 | **Size**: 18.1 KB | **Language**: csharp
+**Lines**: 429 | **Size**: 18.1 KB | **Language**: csharp
 
 ```csharp
 using System.Net;
@@ -17520,7 +17611,8 @@ public class ClusterMatrixFuzzerTests
             {
                 using var ms = new MemoryStream();
                 await stdinStream.CopyToAsync(ms, ct);
-                Volumes[command.Arguments.LastOrDefault() ?? "vol"] = ms.ToArray();
+                var key = command.Arguments.Count > 0 ? command.Arguments[^1] : "vol";
+                Volumes[key] = ms.ToArray();
             }
 
             if (stdoutStream != null)
@@ -17691,7 +17783,7 @@ public class ClusterMatrixFuzzerTests
 
         var mesh = WireGuardMeshService.GenerateMeshConfigurations(fleet);
         Assert.Equal(5, mesh.Count);
-        foreach (var (k, conf) in mesh)
+        foreach (var (_, conf) in mesh)
         {
             Assert.Contains("Address = 10.99.0.", conf, StringComparison.Ordinal);
         }

@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Net;
 using System.Text;
 using Starry.Core.Nodes;
 using Starry.Core.Processes;
@@ -58,10 +59,25 @@ public static class WireGuardMeshService
 
                 if (!string.IsNullOrEmpty(peerNode.Endpoint) && peerNode.IsPublic)
                 {
-                    var ep = peerNode.Endpoint.Contains(':', StringComparison.Ordinal)
-                ? peerNode.Endpoint
-                : $"{peerNode.Endpoint}:{peerNode.ListenPort}";
-            sb.AppendLine(CultureInfo.InvariantCulture, $"Endpoint = {ep}");
+                    string ep;
+                    if (peerNode.Endpoint.StartsWith('[') && peerNode.Endpoint.Contains("]:", StringComparison.Ordinal))
+                    {
+                        ep = peerNode.Endpoint;
+                    }
+                    else if (IPAddress.TryParse(peerNode.Endpoint, out var ip) && ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6)
+                    {
+                        ep = $"[{peerNode.Endpoint}]:{peerNode.ListenPort}";
+                    }
+                    else if (peerNode.Endpoint.Contains(':', StringComparison.Ordinal))
+                    {
+                        ep = peerNode.Endpoint;
+                    }
+                    else
+                    {
+                        ep = $"{peerNode.Endpoint}:{peerNode.ListenPort}";
+                    }
+
+                    sb.AppendLine(CultureInfo.InvariantCulture, $"Endpoint = {ep}");
                 }
 
                 sb.AppendLine(CultureInfo.InvariantCulture, $"PersistentKeepalive = {DefaultKeepalive}");
@@ -97,11 +113,11 @@ public static class WireGuardMeshService
         };
         await node.ExecuteCommandAsync(writeSpec, ct).ConfigureAwait(false);
 
-        // POSIX-compliant sync without bashism <(...)
+        // POSIX-compliant sync without bashism <(...) using secure mktemp
         var syncSpec = new ProcessSpec
         {
             Executable = "sh",
-            Arguments = ["-c", $"wg-quick strip {InterfaceName} > /tmp/{InterfaceName}.strip 2>/dev/null && wg syncconf {InterfaceName} /tmp/{InterfaceName}.strip 2>/dev/null && rm -f /tmp/{InterfaceName}.strip || (wg-quick down {InterfaceName} 2>/dev/null; wg-quick up {InterfaceName})"]
+            Arguments = ["-c", $"STRIP=$(mktemp /tmp/{InterfaceName}.XXXXXX 2>/dev/null || echo \"/tmp/{InterfaceName}.$$.strip\") && wg-quick strip {InterfaceName} > \"$STRIP\" 2>/dev/null && wg syncconf {InterfaceName} \"$STRIP\" 2>/dev/null; rm -f \"$STRIP\" || (wg-quick down {InterfaceName} 2>/dev/null; wg-quick up {InterfaceName})"]
         };
         var result = await node.ExecuteCommandAsync(syncSpec, ct).ConfigureAwait(false);
         if (!result.IsSuccess)
