@@ -240,7 +240,7 @@ public sealed class VirtualConfigEngine
                             ["vpn_ip"] = new JsonObject { ["type"] = "string" },
                             ["is_public"] = new JsonObject { ["type"] = "boolean", ["default"] = false }
                         },
-                        ["required"] = new JsonArray { "host" }
+                        ["required"] = new JsonArray(JsonValue.Create("host"))
                     }
                 },
                 ["services"] = new JsonObject
@@ -259,7 +259,7 @@ public sealed class VirtualConfigEngine
                             ["volumes"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } },
                             ["env"] = new JsonObject { ["type"] = "object" }
                         },
-                        ["required"] = new JsonArray { "image" }
+                        ["required"] = new JsonArray(JsonValue.Create("image"))
                     }
                 }
             }

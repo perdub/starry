@@ -1,0 +1,78 @@
+name: Full Multi-Distro Matrix & Chaos CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-matrix-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore dependencies
+        run: dotnet restore Starry.slnx
+
+      - name: Build solution (TreatWarningsAsErrors)
+        run: dotnet build Starry.slnx --configuration Release --no-restore
+
+      - name: Run Unit Tests
+        run: dotnet test tests/Starry.UnitTests/Starry.UnitTests.csproj --configuration Release --no-build --verbosity normal
+
+      - name: Run Chaos Engineering Tests
+        run: dotnet test tests/Starry.ChaosTests/Starry.ChaosTests.csproj --configuration Release --no-build --verbosity normal
+
+      - name: Run E2E Tests
+        run: dotnet test tests/Starry.E2ETests/Starry.E2ETests.csproj --configuration Release --no-build --verbosity normal
+
+      - name: Pack NuGet .NET Tool
+        run: dotnet pack src/Starry.Cli/Starry.Cli.csproj --configuration Release --no-build -o nupkg
+
+      - name: Verify Native AOT Publish (linux-x64)
+        run: dotnet publish src/Starry.Cli/Starry.Cli.csproj -r linux-x64 -c Release -p:PublishAotEnabled=true -o publish-aot
+
+  distro-matrix:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - distro: "Ubuntu 24.04 (Noble)"
+            image: "ubuntu:24.04"
+            pkg: "apt-get update && apt-get install -y curl wireguard nftables"
+          - distro: "Debian 12 (Bookworm)"
+            image: "debian:12"
+            pkg: "apt-get update && apt-get install -y curl wireguard nftables"
+          - distro: "AlmaLinux 9"
+            image: "almalinux:9"
+            pkg: "dnf install -y curl wireguard-tools nftables"
+          - distro: "Alpine 3.20"
+            image: "alpine:3.20"
+            pkg: "apk add --no-cache curl wireguard-tools nftables"
+          - distro: "Arch Linux"
+            image: "archlinux:latest"
+            pkg: "pacman -Sy --noconfirm curl wireguard-tools nftables"
+    container:
+      image: ${{ matrix.image }}
+    steps:
+      - name: Install System Prerequisites
+        run: ${{ matrix.pkg }}
+
+      - name: Verify Host Tools Availability
+        run: |
+          which curl || exit 1
+          which nft || exit 1
+          which wg || which wireguard-tools || true

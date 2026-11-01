@@ -53,7 +53,8 @@ public abstract class BaseSocketContainerRuntime : IContainerRuntime
         using var response = await client.GetAsync(new Uri(BaseDockerUri, $"{ApiVersionPrefix}/version"), ct).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
 
-        var json = await response.Content.ReadFromJsonAsync<JsonObject>(ct).ConfigureAwait(false);
+        var bodyStr = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+        var json = JsonNode.Parse(bodyStr) as JsonObject;
         var version = json?["Version"]?.ToString() ?? "unknown";
         var os = json?["Os"]?.ToString() ?? "linux";
         var arch = json?["Arch"]?.ToString() ?? "amd64";
@@ -79,7 +80,8 @@ public abstract class BaseSocketContainerRuntime : IContainerRuntime
         using var response = await client.GetAsync(new Uri(BaseDockerUri, $"{ApiVersionPrefix}/containers/json?all=true"), ct).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
 
-        var jsonArray = await response.Content.ReadFromJsonAsync<JsonArray>(ct).ConfigureAwait(false);
+        var bodyStr = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+        var jsonArray = JsonNode.Parse(bodyStr) as JsonArray;
         var result = new List<ContainerState>();
 
         if (jsonArray == null)
@@ -169,7 +171,8 @@ public abstract class BaseSocketContainerRuntime : IContainerRuntime
             ct).ConfigureAwait(false);
 
         createRes.EnsureSuccessStatusCode();
-        var createJson = await createRes.Content.ReadFromJsonAsync<JsonObject>(ct).ConfigureAwait(false);
+        var createStr = await createRes.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+        var createJson = JsonNode.Parse(createStr) as JsonObject;
         var containerId = createJson?["Id"]?.ToString() ?? throw new InvalidOperationException("Failed to get created container Id.");
 
         await StartContainerAsync(client, containerId, ct).ConfigureAwait(false);
@@ -261,7 +264,7 @@ public abstract class BaseSocketContainerRuntime : IContainerRuntime
         var binds = new JsonArray();
         foreach (var vol in spec.Volumes)
         {
-            binds.Add(vol);
+            binds.Add(JsonValue.Create(vol));
         }
 
         // Mount dynamic files directory
@@ -270,14 +273,14 @@ public abstract class BaseSocketContainerRuntime : IContainerRuntime
             var baseDir = $"/var/lib/starry/files/{spec.Name}";
             foreach (var destPath in spec.Files.Keys)
             {
-                binds.Add($"{baseDir}/{destPath.TrimStart('/')}:{destPath}:ro");
+                binds.Add(JsonValue.Create($"{baseDir}/{destPath.TrimStart('/')}:{destPath}:ro"));
             }
         }
 
         var env = new JsonArray();
         foreach (var (k, v) in spec.Environment)
         {
-            env.Add($"{k}={v}");
+            env.Add(JsonValue.Create($"{k}={v}"));
         }
 
         var labels = new JsonObject();

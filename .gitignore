@@ -8,6 +8,8 @@
 [Ll]ogs/
 nupkg/
 *.nupkg
+publish-aot/
+
 
 
 # .NET / Rider / Visual Studio

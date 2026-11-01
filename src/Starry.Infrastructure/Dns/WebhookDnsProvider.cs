@@ -46,7 +46,8 @@ public sealed class WebhookDnsProvider : IDnsProvider
             }
         };
 
-        using var response = await _httpClient.PostAsJsonAsync(_webhookUri, payload, ct).ConfigureAwait(false);
+        using var content = new StringContent(payload.ToJsonString(), System.Text.Encoding.UTF8, "application/json");
+        using var response = await _httpClient.PostAsync(_webhookUri, content, ct).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
     }
 
@@ -62,7 +63,8 @@ public sealed class WebhookDnsProvider : IDnsProvider
             ["recordId"] = recordId
         };
 
-        using var response = await _httpClient.PostAsJsonAsync(_webhookUri, payload, ct).ConfigureAwait(false);
+        using var content = new StringContent(payload.ToJsonString(), System.Text.Encoding.UTF8, "application/json");
+        using var response = await _httpClient.PostAsync(_webhookUri, content, ct).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
     }
 }

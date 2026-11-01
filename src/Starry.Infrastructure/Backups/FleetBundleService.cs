@@ -43,13 +43,21 @@ public static class FleetBundleService
                 nodesList.AddRange(nodesObj.Select(kv => kv.Key));
             }
 
-            var manifest = new BundleManifest(
-                ClusterName: clusterName,
-                CreatedAt: DateTime.UtcNow,
-                StarryVersion: "0.1.0",
-                Nodes: nodesList);
+            var manifestObj = new JsonObject
+            {
+                ["cluster_name"] = clusterName,
+                ["created_at"] = DateTime.UtcNow.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
+                ["starry_version"] = "0.1.0"
+            };
 
-            var manifestJson = JsonSerializer.Serialize(manifest, IndentedJsonOptions);
+            var nodesArr = new JsonArray();
+            foreach (var node in nodesList)
+            {
+                nodesArr.Add(JsonValue.Create(node));
+            }
+            manifestObj["nodes"] = nodesArr;
+
+            var manifestJson = manifestObj.ToJsonString(IndentedJsonOptions);
             File.WriteAllText(Path.Combine(tempStagingDir, "manifest.json"), manifestJson);
 
             // Pack directory into tar.gz

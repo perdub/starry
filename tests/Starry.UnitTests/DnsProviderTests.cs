@@ -10,11 +10,16 @@ public class DnsProviderTests
     private sealed class MockHttpMessageHandler : HttpMessageHandler
     {
         public HttpRequestMessage? LastRequest { get; private set; }
+        public string? LastRequestBody { get; private set; }
 
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             LastRequest = request;
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
+            if (request.Content != null)
+            {
+                LastRequestBody = await request.Content.ReadAsStringAsync(cancellationToken);
+            }
+            return new HttpResponseMessage(HttpStatusCode.OK);
         }
     }
 
@@ -31,7 +36,7 @@ public class DnsProviderTests
 
         Assert.NotNull(handler.LastRequest);
         Assert.Equal(HttpMethod.Post, handler.LastRequest.Method);
-        var body = await handler.LastRequest.Content!.ReadAsStringAsync();
+        var body = handler.LastRequestBody ?? string.Empty;
         Assert.Contains("upsert", body, StringComparison.Ordinal);
         Assert.Contains("bocchi.example.com", body, StringComparison.Ordinal);
         Assert.Contains("198.51.100.10", body, StringComparison.Ordinal);
@@ -48,7 +53,7 @@ public class DnsProviderTests
         await provider.DeleteRecordAsync("example.com", "rec-to-delete");
 
         Assert.NotNull(handler.LastRequest);
-        var body = await handler.LastRequest.Content!.ReadAsStringAsync();
+        var body = handler.LastRequestBody ?? string.Empty;
         Assert.Contains("delete", body, StringComparison.Ordinal);
         Assert.Contains("rec-to-delete", body, StringComparison.Ordinal);
     }

@@ -33,7 +33,8 @@ public sealed class CloudflareDnsProvider : IDnsProvider
         using var zoneRes = await _httpClient.SendAsync(request, ct).ConfigureAwait(false);
         zoneRes.EnsureSuccessStatusCode();
 
-        var zoneJson = await zoneRes.Content.ReadFromJsonAsync<JsonObject>(ct).ConfigureAwait(false);
+        var zoneStr = await zoneRes.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+        var zoneJson = JsonNode.Parse(zoneStr) as JsonObject;
         var zoneId = ExtractFirstResultId(zoneJson);
         if (string.IsNullOrEmpty(zoneId))
         {
@@ -46,7 +47,8 @@ public sealed class CloudflareDnsProvider : IDnsProvider
         using var recordsRes = await _httpClient.SendAsync(recordsReq, ct).ConfigureAwait(false);
         recordsRes.EnsureSuccessStatusCode();
 
-        var recordsJson = await recordsRes.Content.ReadFromJsonAsync<JsonObject>(ct).ConfigureAwait(false);
+        var recordsStr = await recordsRes.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+        var recordsJson = JsonNode.Parse(recordsStr) as JsonObject;
         var resultList = new List<DnsRecord>();
 
         if (recordsJson?["result"] is JsonArray arr)
@@ -93,7 +95,7 @@ public sealed class CloudflareDnsProvider : IDnsProvider
         {
             using var putReq = new HttpRequestMessage(HttpMethod.Put, $"zones/{zoneId}/dns_records/{existing.Id}")
             {
-                Content = JsonContent.Create(payload)
+                Content = new StringContent(payload.ToJsonString(), System.Text.Encoding.UTF8, "application/json")
             };
             putReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiToken);
             using var putRes = await _httpClient.SendAsync(putReq, ct).ConfigureAwait(false);
@@ -103,7 +105,7 @@ public sealed class CloudflareDnsProvider : IDnsProvider
         {
             using var postReq = new HttpRequestMessage(HttpMethod.Post, $"zones/{zoneId}/dns_records")
             {
-                Content = JsonContent.Create(payload)
+                Content = new StringContent(payload.ToJsonString(), System.Text.Encoding.UTF8, "application/json")
             };
             postReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiToken);
             using var postRes = await _httpClient.SendAsync(postReq, ct).ConfigureAwait(false);
@@ -132,7 +134,8 @@ public sealed class CloudflareDnsProvider : IDnsProvider
         using var zoneRes = await _httpClient.SendAsync(request, ct).ConfigureAwait(false);
         zoneRes.EnsureSuccessStatusCode();
 
-        var zoneJson = await zoneRes.Content.ReadFromJsonAsync<JsonObject>(ct).ConfigureAwait(false);
+        var zoneStr = await zoneRes.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+        var zoneJson = JsonNode.Parse(zoneStr) as JsonObject;
         var zoneId = ExtractFirstResultId(zoneJson);
         if (string.IsNullOrEmpty(zoneId))
         {
