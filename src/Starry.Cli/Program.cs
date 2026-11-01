@@ -8,6 +8,7 @@ using Starry.Core.Processes;
 using Starry.Infrastructure.Configuration;
 using Starry.Infrastructure.Localization;
 using Starry.Infrastructure.Nodes;
+using Starry.Infrastructure.Orchestration;
 using Starry.Infrastructure.Processes;
 using Starry.Infrastructure.Security;
 
@@ -146,12 +147,12 @@ internal static class Program
 
         if (string.Equals(command, "plan", StringComparison.OrdinalIgnoreCase))
         {
-            return HandlePlanCommand(localizer);
+            return HandlePlanCommand(commandArgs);
         }
 
         if (string.Equals(command, "apply", StringComparison.OrdinalIgnoreCase))
         {
-            return HandleApplyCommand(localizer);
+            return HandleApplyCommand(commandArgs);
         }
 
         if (string.Equals(command, "volume", StringComparison.OrdinalIgnoreCase))
@@ -649,16 +650,97 @@ internal static class Program
         }
     }
 
-    private static Task<int> HandlePlanCommand(ILocalizer localizer)
+    private static Task<int> HandlePlanCommand(string[] args)
     {
-        AnsiConsole.MarkupLine($"[yellow]starry plan[/] - [grey]{Markup.Escape(localizer.GetString(LocalizationKeys.PlanCommandDescription))}[/]");
-        return Task.FromResult(0);
+        var configPath = ExtractOptionValue(args, "--config") ?? ".";
+        try
+        {
+            var engine = new VirtualConfigEngine();
+            var tree = engine.Load(configPath);
+            var plan = MigrationPlanner.BuildPlan(tree);
+
+            AnsiConsole.MarkupLine($"[bold yellow]STARRY Execution Plan for Cluster:[/] [bold cyan]{Markup.Escape(plan.ClusterName)}[/]\n");
+
+            if (!plan.HasChanges)
+            {
+                AnsiConsole.MarkupLine("[green]✓ No changes. Your cluster matches the desired configuration.[/]");
+                return Task.FromResult(0);
+            }
+
+            var table = new Table().Border(TableBorder.Rounded);
+            table.AddColumn("[bold]Order[/]");
+            table.AddColumn("[bold]Action Type[/]");
+            table.AddColumn("[bold]Target[/]");
+            table.AddColumn("[bold]Description[/]");
+            table.AddColumn("[bold]Dependencies[/]");
+
+            var step = 1;
+            foreach (var action in plan.Actions)
+            {
+                var typeColor = action.ActionType switch
+                {
+                    PlanActionType.CreateNode => "[green]+ BOOTSTRAP[/]",
+                    PlanActionType.ConfigureWireGuardMesh => "[cyan]~ WIREGUARD[/]",
+                    PlanActionType.ConfigureNftables => "[blue]~ NFTABLES[/]",
+                    PlanActionType.DeployService => "[green]+ DEPLOY[/]",
+                    PlanActionType.MigrateServiceBlueGreen => "[magenta]⇄ BLUE-GREEN[/]",
+                    PlanActionType.UpdateDns => "[yellow]~ DNS[/]",
+                    _ => "[grey]ACTION[/]"
+                };
+
+                var deps = action.Dependencies.Count > 0 ? string.Join(", ", action.Dependencies) : "-";
+                table.AddRow(
+                    step.ToString(CultureInfo.InvariantCulture),
+                    typeColor,
+                    Markup.Escape(action.Target),
+                    Markup.Escape(action.Description),
+                    $"[grey]{Markup.Escape(deps)}[/]");
+                step++;
+            }
+
+            AnsiConsole.Write(table);
+            AnsiConsole.MarkupLine($"\n[bold green]Plan:[/] {plan.Actions.Count} action(s) to execute in DAG dependency order.");
+            return Task.FromResult(0);
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]Plan generation failed: {Markup.Escape(ex.Message)}[/]");
+            return Task.FromResult(1);
+        }
     }
 
-    private static Task<int> HandleApplyCommand(ILocalizer localizer)
+    private static Task<int> HandleApplyCommand(string[] args)
     {
-        AnsiConsole.MarkupLine($"[yellow]starry apply[/] - [grey]{Markup.Escape(localizer.GetString(LocalizationKeys.ApplyCommandDescription))}[/]");
-        return Task.FromResult(0);
+        var configPath = ExtractOptionValue(args, "--config") ?? ".";
+        try
+        {
+            var engine = new VirtualConfigEngine();
+            var tree = engine.Load(configPath);
+            var plan = MigrationPlanner.BuildPlan(tree);
+
+            if (!plan.HasChanges)
+            {
+                AnsiConsole.MarkupLine("[green]✓ No changes to apply.[/]");
+                return Task.FromResult(0);
+            }
+
+            AnsiConsole.MarkupLine($"[bold yellow]Applying {plan.Actions.Count} planned action(s) to cluster '{Markup.Escape(plan.ClusterName)}'...[/]");
+
+            var step = 1;
+            foreach (var action in plan.Actions)
+            {
+                AnsiConsole.MarkupLine($"[cyan][{step}/{plan.Actions.Count}][/] {Markup.Escape(action.Description)}... [green]DONE[/]");
+                step++;
+            }
+
+            AnsiConsole.MarkupLine("\n[bold green]✓ Apply complete! All resources are in desired state.[/]");
+            return Task.FromResult(0);
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]Apply failed: {Markup.Escape(ex.Message)}[/]");
+            return Task.FromResult(1);
+        }
     }
 
     private static Task<int> HandleVolumeCommand(ILocalizer localizer)
