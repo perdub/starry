@@ -1,9 +1,13 @@
-﻿using System.Reflection;
+﻿using System.Globalization;
+using System.Reflection;
+using System.Text.Json.Nodes;
 using Spectre.Console;
 using Starry.Core.Localization;
+using Starry.Core.Nodes;
 using Starry.Core.Processes;
 using Starry.Infrastructure.Configuration;
 using Starry.Infrastructure.Localization;
+using Starry.Infrastructure.Nodes;
 using Starry.Infrastructure.Processes;
 using Starry.Infrastructure.Security;
 
@@ -137,7 +141,7 @@ internal static class Program
 
         if (string.Equals(command, "nodes", StringComparison.OrdinalIgnoreCase))
         {
-            return HandleNodesCommand(localizer);
+            return HandleNodesCommand(commandArgs, localizer);
         }
 
         if (string.Equals(command, "plan", StringComparison.OrdinalIgnoreCase))
@@ -518,10 +522,131 @@ internal static class Program
         return null;
     }
 
-    private static Task<int> HandleNodesCommand(ILocalizer localizer)
+    private static async Task<int> HandleNodesCommand(string[] args, ILocalizer localizer)
     {
+        var subCommand = args.Length > 0 ? args[0] : "list";
+        var subArgs = args.Length > 1 ? args[1..] : Array.Empty<string>();
+
+        if (string.Equals(subCommand, "upgrade", StringComparison.OrdinalIgnoreCase))
+        {
+            return await ExecuteNodesUpgradeAsync(subArgs).ConfigureAwait(false);
+        }
+
+        if (string.Equals(subCommand, "rotate-keys", StringComparison.OrdinalIgnoreCase))
+        {
+            return await ExecuteNodesRotateKeysAsync(subArgs).ConfigureAwait(false);
+        }
+
         AnsiConsole.MarkupLine($"[yellow]starry nodes[/] - [grey]{Markup.Escape(localizer.GetString(LocalizationKeys.NodesCommandDescription))}[/]");
-        return Task.FromResult(0);
+        return 0;
+    }
+
+    private static async Task<int> ExecuteNodesUpgradeAsync(string[] args)
+    {
+        var configPath = ExtractOptionValue(args, "--config") ?? ".";
+        var fullUpgrade = args.Any(a => string.Equals(a, "--full", StringComparison.OrdinalIgnoreCase));
+
+        try
+        {
+            var engine = new VirtualConfigEngine();
+            var tree = engine.Load(configPath);
+
+            if (!tree.Root.TryGetPropertyValue("nodes", out var nodesNode) || nodesNode is not JsonObject nodesObj)
+            {
+                AnsiConsole.MarkupLine("[yellow]No nodes defined in cluster configuration.[/]");
+                return 0;
+            }
+
+            var service = new NodeOperationsService();
+            AnsiConsole.MarkupLine($"[bold yellow]Starting rolling upgrade across {nodesObj.Count} node(s)...[/]");
+
+            foreach (var (nodeName, nodeVal) in nodesObj)
+            {
+                if (nodeVal is not JsonObject nodeObj)
+                {
+                    continue;
+                }
+
+                var host = nodeObj["host"]?.ToString() ?? "localhost";
+                var port = nodeObj.TryGetPropertyValue("port", out var pVal) && int.TryParse(pVal?.ToString(), CultureInfo.InvariantCulture, out var p) ? p : 22;
+                var user = nodeObj["user"]?.ToString() ?? "root";
+
+                var isLocal = string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase) || string.Equals(host, "127.0.0.1", StringComparison.Ordinal);
+                INodeConnection conn = isLocal
+                    ? new LocalNodeConnection(nodeName)
+                    : new SshNodeConnection(new SshNodeOptions { NodeName = nodeName, Host = host, Port = port, User = user });
+
+                await using (conn.ConfigureAwait(false))
+                {
+                    AnsiConsole.MarkupLine($"\n[cyan]=== Processing node '{Markup.Escape(nodeName)}' ({Markup.Escape(host)}) ===[/]");
+                    await service.UpgradeNodeAsync(conn, fullUpgrade, msg => AnsiConsole.MarkupLine($"[grey]  > {Markup.Escape(msg)}[/]")).ConfigureAwait(false);
+                    AnsiConsole.MarkupLine($"[green]✓ Node '{Markup.Escape(nodeName)}' updated successfully.[/]");
+                }
+            }
+
+            AnsiConsole.MarkupLine("\n[bold green]✓ All nodes successfully upgraded![/]");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]Rolling upgrade failed: {Markup.Escape(ex.Message)}[/]");
+            return 1;
+        }
+    }
+
+    private static async Task<int> ExecuteNodesRotateKeysAsync(string[] args)
+    {
+        var nodeName = ExtractOptionValue(args, "--node");
+        var oldPubKey = ExtractOptionValue(args, "--old-pubkey");
+        var configPath = ExtractOptionValue(args, "--config") ?? ".";
+
+        if (string.IsNullOrEmpty(nodeName) || string.IsNullOrEmpty(oldPubKey))
+        {
+            AnsiConsole.MarkupLine("[red]Usage: starry nodes rotate-keys --node <nodeName> --old-pubkey <pubKey> [--config <path>][/]");
+            return 1;
+        }
+
+        try
+        {
+            var engine = new VirtualConfigEngine();
+            var tree = engine.Load(configPath);
+
+            var nodePath = $"nodes.{nodeName}";
+            var nodeVal = tree.FindNode(nodePath) as JsonObject;
+            if (nodeVal == null)
+            {
+                AnsiConsole.MarkupLine($"[red]Node '{Markup.Escape(nodeName)}' not found in configuration.[/]");
+                return 1;
+            }
+
+            var host = nodeVal["host"]?.ToString() ?? "localhost";
+            var port = nodeVal.TryGetPropertyValue("port", out var pVal) && int.TryParse(pVal?.ToString(), CultureInfo.InvariantCulture, out var p) ? p : 22;
+            var user = nodeVal["user"]?.ToString() ?? "root";
+
+            await using var conn = new SshNodeConnection(new SshNodeOptions { NodeName = nodeName, Host = host, Port = port, User = user });
+            var newPrivateKey = await NodeOperationsService.RotateSshKeysAsync(conn, oldPubKey, msg => AnsiConsole.MarkupLine($"[grey]  > {Markup.Escape(msg)}[/]")).ConfigureAwait(false);
+
+            // Update configuration with new plain secret and encrypt if master key is available
+            nodeVal["ssh_key"] = $"PLAIN[{newPrivateKey}]";
+            var masterKey = ResolveKeyFromArgsOrEnv(args, "--key", "STARRY_MASTER_KEY");
+            if (masterKey != null)
+            {
+                var secretManager = new SecretManager();
+                secretManager.EncryptOpenSecrets(tree, masterKey, configPath, engine);
+            }
+            else
+            {
+                engine.Pack(tree, configPath, "yaml");
+            }
+
+            AnsiConsole.MarkupLine($"[bold green]✓ Successfully rotated SSH keys for node '{Markup.Escape(nodeName)}' and updated configuration![/]");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]SSH key rotation failed: {Markup.Escape(ex.Message)}[/]");
+            return 1;
+        }
     }
 
     private static Task<int> HandlePlanCommand(ILocalizer localizer)
