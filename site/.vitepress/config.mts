@@ -25,6 +25,7 @@ export default defineConfig({
             text: 'Руководство',
             items: [
               { text: 'Быстрый старт', link: '/guide/getting-started' },
+              { text: 'Бэкапы и Bundle (DR)', link: '/guide/backups-disaster-recovery' },
               { text: 'Миграции и DNS (P2P)', link: '/guide/migrations-dns-p2p' },
               { text: 'Docker и Podman (files)', link: '/guide/containers-docker-podman' },
               { text: 'Сетевой меш и VIP', link: '/guide/network-mesh-vips' },
@@ -83,6 +84,7 @@ export default defineConfig({
             text: 'Guide',
             items: [
               { text: 'Getting Started', link: '/en/guide/getting-started' },
+              { text: 'Backups & DR Bundles', link: '/en/guide/backups-disaster-recovery' },
               { text: 'Migrations & DNS (P2P)', link: '/en/guide/migrations-dns-p2p' },
               { text: 'Docker & Podman (files)', link: '/en/guide/containers-docker-podman' },
               { text: 'WireGuard Mesh & VIPs', link: '/en/guide/network-mesh-vips' },
