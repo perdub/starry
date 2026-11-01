@@ -1,0 +1,27 @@
+# Deepwork metadata
+.slim/deepwork/
+
+# Build results
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+
+# .NET / Rider / Visual Studio
+.vs/
+.idea/
+*.user
+*.userosscache
+*.sln.docstates
+.vscode/
+
+# Node / VitePress
+node_modules/
+dist/
+cache/
+.vitepress/dist/
+.vitepress/cache/
+
+# OS files
+.DS_Store
+Thumbs.db
