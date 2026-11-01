@@ -24,7 +24,7 @@
     <!-- Native AOT Compatibility -->
     <PublishAot>false</PublishAot>
     <PublishAot Condition="'$(PublishAotEnabled)' == 'true'">true</PublishAot>
-    <InvariantGlobalization>false</InvariantGlobalization>
+    <InvariantGlobalization>true</InvariantGlobalization>
     <IlcOptimizationPreference>Speed</IlcOptimizationPreference>
     <IlcFoldIdenticalMethodBodies>false</IlcFoldIdenticalMethodBodies>
     <NoWarn>$(NoWarn);IL2026;IL3050;IL2111;IL2104</NoWarn>

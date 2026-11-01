@@ -59,10 +59,10 @@ jobs:
         include:
           - distro: "Ubuntu 24.04 (Noble)"
             image: "ubuntu:24.04"
-            pkg: "apt-get update && apt-get install -y curl wireguard nftables"
+            pkg: "apt-get update && apt-get install -y --no-install-recommends curl wireguard-tools nftables"
           - distro: "Debian 12 (Bookworm)"
             image: "debian:12"
-            pkg: "apt-get update && apt-get install -y curl wireguard nftables"
+            pkg: "apt-get update && apt-get install -y --no-install-recommends curl wireguard-tools nftables"
           - distro: "AlmaLinux 9"
             image: "almalinux:9"
             pkg: "dnf install -y --allowerasing wireguard-tools nftables"
@@ -89,7 +89,7 @@ jobs:
 
       - name: Test Native AOT Binary in Distro Container
         run: |
-          chmod +x /usr/local/bin/starry
+          [ -f /usr/local/bin/starry ] && chmod +x /usr/local/bin/starry || (find /usr/local/bin -name starry -exec cp {} /usr/local/bin/starry \; && chmod +x /usr/local/bin/starry)
           /usr/local/bin/starry --version
           /usr/local/bin/starry config schema > /dev/null
           /usr/local/bin/starry plan || true

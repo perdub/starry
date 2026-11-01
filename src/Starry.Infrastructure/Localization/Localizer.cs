@@ -154,6 +154,13 @@ public sealed class Localizer : ILocalizer
             return envLang;
         }
 
-        return CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
+        try
+        {
+            return CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
+        }
+        catch (Exception)
+        {
+            return "en";
+        }
     }
 }
