@@ -31,6 +31,16 @@ public sealed class LocalNodeConnection : INodeConnection
         return await _runner.RunAsync(command, ct).ConfigureAwait(false);
     }
 
+    public async Task<ProcessResult> ExecuteStreamingCommandAsync(
+        ProcessSpec command,
+        Stream? stdinStream,
+        Stream? stdoutStream,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        return await _runner.RunStreamingAsync(command, stdinStream, stdoutStream, ct).ConfigureAwait(false);
+    }
+
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope", Justification = "SocketsHttpHandler ownership transferred to HttpClient")]
     public Task<HttpClient> CreateSocketHttpClientAsync(string socketPath, CancellationToken ct = default)
     {

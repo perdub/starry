@@ -253,10 +253,63 @@ public sealed class SecretManager
                            ?? engine.Providers[0];
             var serialized = provider.Serialize(tree.Root);
             AtomicWriteFile(rootPath, serialized);
+            return;
         }
-        else if (Directory.Exists(rootPath))
+
+        if (Directory.Exists(rootPath))
         {
+            var filesByPath = tree.SourceMap.Values
+                .Select(v => v.FilePath)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (filesByPath.Count > 0)
+            {
+                foreach (var relativeFile in filesByPath)
+                {
+                    SavePhysicalConfigFile(tree, rootPath, relativeFile, engine);
+                }
+                return;
+            }
+
             engine.Split(tree, rootPath, "yaml");
+        }
+    }
+
+    private static void SavePhysicalConfigFile(ConfigTree tree, string rootDir, string relativeFile, VirtualConfigEngine engine)
+    {
+        var fullPath = Path.IsPathRooted(relativeFile)
+            ? relativeFile
+            : Path.Combine(rootDir, relativeFile);
+
+        var ext = Path.GetExtension(fullPath);
+        var provider = engine.Providers.FirstOrDefault(p => p.SupportedExtensions.Contains(ext, StringComparer.OrdinalIgnoreCase));
+        if (provider == null)
+        {
+            return;
+        }
+
+        var fileNameNoExt = Path.GetFileNameWithoutExtension(relativeFile);
+        var dirName = Path.GetDirectoryName(relativeFile)?.Replace('\\', '/');
+
+        JsonNode? subtree = null;
+        if (string.Equals(dirName, "nodes", StringComparison.OrdinalIgnoreCase) && tree.Root["nodes"] is JsonObject nodesObj)
+        {
+            subtree = nodesObj[fileNameNoExt];
+        }
+        else if (string.Equals(dirName, "services", StringComparison.OrdinalIgnoreCase) && tree.Root["services"] is JsonObject svcObj)
+        {
+            subtree = svcObj[fileNameNoExt];
+        }
+        else if (string.IsNullOrEmpty(dirName) || string.Equals(fileNameNoExt, "starry", StringComparison.OrdinalIgnoreCase))
+        {
+            subtree = tree.Root;
+        }
+
+        if (subtree != null)
+        {
+            var content = provider.Serialize(subtree);
+            AtomicWriteFile(fullPath, content);
         }
     }
 }

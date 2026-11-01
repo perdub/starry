@@ -67,6 +67,100 @@ public sealed class ProcessRunner : IProcessRunner
         }
     }
 
+    public async Task<ProcessResult> RunStreamingAsync(
+        ProcessSpec spec,
+        Stream? stdinStream,
+        Stream? stdoutStream,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(spec);
+
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        if (spec.Timeout > TimeSpan.Zero && spec.Timeout < TimeSpan.MaxValue)
+        {
+            linkedCts.CancelAfter(spec.Timeout);
+        }
+
+        var startInfo = CreateStartInfo(spec);
+        startInfo.RedirectStandardInput = stdinStream != null || spec.StandardInputBytes.HasValue;
+        startInfo.RedirectStandardOutput = stdoutStream != null;
+
+        using var process = new Process { StartInfo = startInfo };
+        var stderrBuilder = new StringBuilder();
+
+        process.ErrorDataReceived += (_, e) =>
+        {
+            if (e.Data != null)
+            {
+                stderrBuilder.AppendLine(e.Data);
+            }
+        };
+
+        var stopwatch = Stopwatch.StartNew();
+        StartProcess(process, spec.Executable);
+        process.BeginErrorReadLine();
+
+        var (stdinTask, stdoutTask) = SetupStreamingPipes(process, stdinStream, stdoutStream, spec.StandardInputBytes, linkedCts.Token);
+
+        try
+        {
+            await process.WaitForExitAsync(linkedCts.Token).ConfigureAwait(false);
+            if (stdinTask != null)
+            {
+                await stdinTask.ConfigureAwait(false);
+            }
+            if (stdoutTask != null)
+            {
+                await stdoutTask.ConfigureAwait(false);
+            }
+            stopwatch.Stop();
+
+            return new ProcessResult(process.ExitCode, string.Empty, stderrBuilder.ToString(), stopwatch.Elapsed);
+        }
+        catch (OperationCanceledException ex)
+        {
+            TerminateProcessTree(process);
+            stopwatch.Stop();
+            throw new TimeoutException($"Process '{spec.Executable}' timed out or was cancelled after {stopwatch.ElapsedMilliseconds} ms.", ex);
+        }
+    }
+
+    private static (Task? StdinTask, Task? StdoutTask) SetupStreamingPipes(
+        Process process,
+        Stream? stdinStream,
+        Stream? stdoutStream,
+        ReadOnlyMemory<byte>? inputBytes,
+        CancellationToken ct)
+    {
+        Task? stdinTask = null;
+        if (stdinStream != null)
+        {
+            stdinTask = Task.Run(async () =>
+            {
+                try
+                {
+                    await stdinStream.CopyToAsync(process.StandardInput.BaseStream, ct).ConfigureAwait(false);
+                    await process.StandardInput.BaseStream.FlushAsync(ct).ConfigureAwait(false);
+                    process.StandardInput.Close();
+                }
+                catch (IOException)
+                {
+                    // Target process may close pipe early
+                }
+            }, ct);
+        }
+        else if (inputBytes.HasValue)
+        {
+            stdinTask = WriteInputAsync(process, inputBytes.Value, ct);
+        }
+
+        Task? stdoutTask = stdoutStream != null
+            ? process.StandardOutput.BaseStream.CopyToAsync(stdoutStream, ct)
+            : null;
+
+        return (stdinTask, stdoutTask);
+    }
+
     private static async Task WriteInputAsync(Process process, ReadOnlyMemory<byte> inputBytes, CancellationToken ct)
     {
         try

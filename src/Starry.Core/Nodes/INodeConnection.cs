@@ -28,18 +28,21 @@ public interface INodeConnection : IAsyncDisposable
     string? DistroId { get; }
 
     /// <summary>
-    /// Executes a command on the target node.
+    /// Executes a command on the target node with buffered text output.
     /// </summary>
-    /// <param name="command">Command and arguments.</param>
-    /// <param name="ct">Cancellation token.</param>
-    /// <returns>Process result.</returns>
     Task<ProcessResult> ExecuteCommandAsync(ProcessSpec command, CancellationToken ct = default);
+
+    /// <summary>
+    /// Executes a command on the target node with direct binary streaming.
+    /// </summary>
+    Task<ProcessResult> ExecuteStreamingCommandAsync(
+        ProcessSpec command,
+        Stream? stdinStream,
+        Stream? stdoutStream,
+        CancellationToken ct = default);
 
     /// <summary>
     /// Opens an HTTP client to communicate with the container engine socket over SSH/Unix domain socket.
     /// </summary>
-    /// <param name="socketPath">Socket path on the node.</param>
-    /// <param name="ct">Cancellation token.</param>
-    /// <returns>Configured HttpClient.</returns>
     Task<HttpClient> CreateSocketHttpClientAsync(string socketPath, CancellationToken ct = default);
 }

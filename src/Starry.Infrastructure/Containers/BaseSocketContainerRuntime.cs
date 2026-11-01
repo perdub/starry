@@ -161,6 +161,16 @@ public abstract class BaseSocketContainerRuntime : IContainerRuntime
             return;
         }
 
+        // If VIP address is specified, ensure it is assigned to starry0 interface on the node
+        if (!string.IsNullOrEmpty(spec.VipAddress))
+        {
+            await node.ExecuteCommandAsync(new ProcessSpec
+            {
+                Executable = "sh",
+                Arguments = ["-c", $"ip addr add {spec.VipAddress}/32 dev starry0 2>/dev/null || true"]
+            }, ct).ConfigureAwait(false);
+        }
+
         // Pull / verify image, then create and start container
         var createPayload = BuildCreateContainerPayload(spec);
         using var createContent = new StringContent(createPayload.ToJsonString(), Encoding.UTF8, "application/json");
@@ -188,31 +198,33 @@ public abstract class BaseSocketContainerRuntime : IContainerRuntime
         ArgumentNullException.ThrowIfNull(target);
         ArgumentException.ThrowIfNullOrWhiteSpace(imageTag);
 
-        // Stream docker/podman save | zstd | ssh load
+        // Stream docker/podman save | zstd | ssh load through binary pipe
+        using var pipeStream = new MemoryStream();
+
         var saveCmd = $"{RuntimeName} save {imageTag} | zstd -3";
-        var streamSpec = new ProcessSpec
+        var saveSpec = new ProcessSpec
         {
             Executable = "sh",
             Arguments = ["-c", saveCmd],
             Timeout = TimeSpan.FromMinutes(30)
         };
 
-        var sourceResult = await source.ExecuteCommandAsync(streamSpec, ct).ConfigureAwait(false);
+        var sourceResult = await source.ExecuteStreamingCommandAsync(saveSpec, stdinStream: null, stdoutStream: pipeStream, ct).ConfigureAwait(false);
         if (!sourceResult.IsSuccess)
         {
             throw new InvalidOperationException($"Failed to save image '{imageTag}' on source node '{source.NodeName}': {sourceResult.StandardError}");
         }
 
+        pipeStream.Position = 0;
         var loadCmd = $"zstd -d | {RuntimeName} load";
         var targetSpec = new ProcessSpec
         {
             Executable = "sh",
             Arguments = ["-c", loadCmd],
-            StandardInputBytes = Encoding.UTF8.GetBytes(sourceResult.StandardOutput),
             Timeout = TimeSpan.FromMinutes(30)
         };
 
-        var targetResult = await target.ExecuteCommandAsync(targetSpec, ct).ConfigureAwait(false);
+        var targetResult = await target.ExecuteStreamingCommandAsync(targetSpec, stdinStream: pipeStream, stdoutStream: null, ct).ConfigureAwait(false);
         if (!targetResult.IsSuccess)
         {
             throw new InvalidOperationException($"Failed to load image '{imageTag}' on target node '{target.NodeName}': {targetResult.StandardError}");
@@ -291,19 +303,62 @@ public abstract class BaseSocketContainerRuntime : IContainerRuntime
         labels["managed-by"] = "starry";
         labels["starry.priority"] = spec.Priority.ToString(CultureInfo.InvariantCulture);
 
+        var (exposedPorts, portBindings) = BuildPortConfigurations(spec.Ports);
+
         var payload = new JsonObject
         {
             ["Image"] = spec.Image,
             ["Env"] = env,
             ["Labels"] = labels,
+            ["ExposedPorts"] = exposedPorts,
             ["HostConfig"] = new JsonObject
             {
                 ["Binds"] = binds,
+                ["PortBindings"] = portBindings,
                 ["RestartPolicy"] = new JsonObject { ["Name"] = "unless-stopped" }
             }
         };
 
         return payload;
+    }
+
+    private static (JsonObject ExposedPorts, JsonObject PortBindings) BuildPortConfigurations(IReadOnlyList<string> ports)
+    {
+        var exposedPorts = new JsonObject();
+        var portBindings = new JsonObject();
+
+        foreach (var portStr in ports)
+        {
+            var parts = portStr.Split(':');
+            if (parts.Length == 2)
+            {
+                var hostPort = parts[0].Trim();
+                var containerPart = parts[1].Trim();
+                var proto = "tcp";
+                var containerPort = containerPart;
+                if (containerPart.Contains('/', StringComparison.Ordinal))
+                {
+                    var sub = containerPart.Split('/');
+                    containerPort = sub[0];
+                    proto = string.Equals(sub[1], "udp", StringComparison.OrdinalIgnoreCase) ? "udp" : "tcp";
+                }
+
+                var containerKey = $"{containerPort}/{proto}";
+                exposedPorts[containerKey] = new JsonObject();
+
+                var bindingArr = new JsonArray
+                {
+                    new JsonObject
+                    {
+                        ["HostIp"] = "0.0.0.0",
+                        ["HostPort"] = hostPort
+                    }
+                };
+                portBindings[containerKey] = bindingArr;
+            }
+        }
+
+        return (exposedPorts, portBindings);
     }
 
     private static async Task StartContainerAsync(HttpClient client, string containerId, CancellationToken ct)

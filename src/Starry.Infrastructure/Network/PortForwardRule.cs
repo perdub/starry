@@ -4,4 +4,5 @@ public sealed record PortForwardRule(
     int HostPort,
     string Protocol,
     string TargetVip,
-    int TargetPort);
+    int TargetPort,
+    string AddressFamily = "any");

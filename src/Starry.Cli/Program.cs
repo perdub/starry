@@ -1,10 +1,14 @@
 ﻿using System.Globalization;
+using System.Net;
 using System.Reflection;
+using System.Text;
 using System.Text.Json.Nodes;
 using Spectre.Console;
+using Starry.Core.Configuration;
 using Starry.Core.Localization;
 using Starry.Core.Nodes;
 using Starry.Core.Processes;
+using Starry.Infrastructure.Agent;
 using Starry.Infrastructure.Backups;
 using Starry.Infrastructure.Configuration;
 using Starry.Infrastructure.Localization;
@@ -21,7 +25,7 @@ internal static class Program
     {
         ArgumentNullException.ThrowIfNull(args);
 
-        var lang = ExtractLanguageArgument(args);
+        var lang = ExtractOptionValue(args, "--lang");
         ILocalizer localizer = new Localizer(lang);
 
         if (args.Length == 0 || ContainsHelp(args))
@@ -41,24 +45,6 @@ internal static class Program
         var commandArgs = args.Length > 1 ? args[1..] : Array.Empty<string>();
 
         return await DispatchCommandAsync(command, commandArgs, localizer).ConfigureAwait(false);
-    }
-
-    private static string? ExtractLanguageArgument(string[] args)
-    {
-        for (var i = 0; i < args.Length; i++)
-        {
-            if (string.Equals(args[i], "--lang", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
-            {
-                return args[i + 1];
-            }
-
-            if (args[i].StartsWith("--lang=", StringComparison.OrdinalIgnoreCase))
-            {
-                return args[i]["--lang=".Length..];
-            }
-        }
-
-        return null;
     }
 
     private static bool ContainsHelp(string[] args)
@@ -101,18 +87,18 @@ internal static class Program
             .AddColumn("[bold yellow]Command[/]")
             .AddColumn("[bold yellow]Description[/]");
 
-        table.AddRow("[cyan]config validate[/]", localizer.GetString(LocalizationKeys.ConfigValidateDescription));
-        table.AddRow("[cyan]config pack[/]", localizer.GetString(LocalizationKeys.ConfigPackDescription));
-        table.AddRow("[cyan]config split[/]", localizer.GetString(LocalizationKeys.ConfigSplitDescription));
-        table.AddRow("[cyan]config fmt[/]", localizer.GetString(LocalizationKeys.ConfigFmtDescription));
-        table.AddRow("[cyan]config schema[/]", localizer.GetString(LocalizationKeys.ConfigSchemaDescription));
-        table.AddRow("[cyan]encrypt[/]", localizer.GetString(LocalizationKeys.EncryptCommandDescription));
-        table.AddRow("[cyan]encrypt global --reencrypt[/]", localizer.GetString(LocalizationKeys.EncryptGlobalDescription));
-        table.AddRow("[cyan]nodes[/]", localizer.GetString(LocalizationKeys.NodesCommandDescription));
+        table.AddRow("[cyan]init[/]", "Initialize new Starry GitOps repository with standard directory layout");
+        table.AddRow("[cyan]adopt[/]", "Brownfield adoption of existing VPS with running containers & Compose");
+        table.AddRow("[cyan]unmanaged list[/]", "Inspect unmanaged containers across cluster nodes");
+        table.AddRow("[cyan]config (validate|pack|split|fmt|schema)[/]", localizer.GetString(LocalizationKeys.ConfigCommandDescription));
+        table.AddRow("[cyan]secret (keygen|encrypt|decrypt)[/]", "Manage secret generation and single-value AEAD encryption");
+        table.AddRow("[cyan]encrypt [global --reencrypt][/]", localizer.GetString(LocalizationKeys.EncryptCommandDescription));
+        table.AddRow("[cyan]nodes (list|bootstrap|upgrade|rotate-keys)[/]", localizer.GetString(LocalizationKeys.NodesCommandDescription));
         table.AddRow("[cyan]plan[/]", localizer.GetString(LocalizationKeys.PlanCommandDescription));
         table.AddRow("[cyan]apply[/]", localizer.GetString(LocalizationKeys.ApplyCommandDescription));
-        table.AddRow("[cyan]volume[/]", localizer.GetString(LocalizationKeys.VolumeCommandDescription));
-        table.AddRow("[cyan]bundle[/]", localizer.GetString(LocalizationKeys.BundleCommandDescription));
+        table.AddRow("[cyan]agent (run|install-service|status)[/]", "Autonomous host agent daemon and drift detection");
+        table.AddRow("[cyan]volume open[/]", localizer.GetString(LocalizationKeys.VolumeCommandDescription));
+        table.AddRow("[cyan]bundle (export|import)[/]", localizer.GetString(LocalizationKeys.BundleCommandDescription));
 
         AnsiConsole.Write(table);
         AnsiConsole.WriteLine();
@@ -131,42 +117,224 @@ internal static class Program
 
     private static Task<int> DispatchCommandAsync(string command, string[] commandArgs, ILocalizer localizer)
     {
-        if (string.Equals(command, "config", StringComparison.OrdinalIgnoreCase))
+        return command.ToUpperInvariant() switch
         {
-            return HandleConfigCommand(commandArgs, localizer);
+            "INIT" => Task.FromResult(HandleInitCommand(commandArgs)),
+            "ADOPT" => HandleAdoptCommandAsync(commandArgs),
+            "UNMANAGED" => HandleUnmanagedCommandAsync(commandArgs),
+            "CONFIG" => HandleConfigCommand(commandArgs, localizer),
+            "SECRET" => Task.FromResult(HandleSecretCommand(commandArgs)),
+            "ENCRYPT" => HandleEncryptCommand(commandArgs),
+            "NODES" => HandleNodesCommand(commandArgs, localizer),
+            "PLAN" => HandlePlanCommand(commandArgs),
+            "APPLY" => HandleApplyCommand(commandArgs),
+            "AGENT" => HandleAgentCommandAsync(commandArgs),
+            "VOLUME" => HandleVolumeCommand(commandArgs),
+            "BUNDLE" => HandleBundleCommand(commandArgs),
+            _ => HandleUnknownCommand(command, localizer)
+        };
+    }
+
+    private static int HandleInitCommand(string[] args)
+    {
+        var targetPath = ResolveTargetPath(args);
+        var clusterName = ExtractOptionValue(args, "--name") ?? "starry-fleet";
+
+        try
+        {
+            var (masterKey, dir) = RepositoryInitializer.Initialize(targetPath, clusterName);
+            AnsiConsole.MarkupLine($"[bold green]✓ Initialized Starry GitOps repository in '{Markup.Escape(dir)}'![/]");
+            AnsiConsole.MarkupLine($"[yellow]Generated master encryption key:[/] [bold green]{masterKey}[/]");
+            AnsiConsole.MarkupLine("[grey]Export this key into your environment: export STARRY_MASTER_KEY=\"...\"[/]");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]Initialization error: {Markup.Escape(ex.Message)}[/]");
+            return 1;
+        }
+    }
+
+    private static async Task<int> HandleAdoptCommandAsync(string[] args)
+    {
+        var outDir = ExtractOptionValue(args, "--out-dir") ?? "./config";
+        var format = ExtractOptionValue(args, "--format") ?? "yaml";
+        var pullFiles = args.Any(a => string.Equals(a, "--pull-files", StringComparison.OrdinalIgnoreCase));
+        var hostArg = args.FirstOrDefault(a => !a.StartsWith('-'));
+
+        if (string.IsNullOrEmpty(hostArg))
+        {
+            AnsiConsole.MarkupLine("[red]Usage: starry adopt <user@host[:port]> [--pull-files] [--out-dir ./config] [--format yaml|json|toml][/]");
+            return 1;
         }
 
-        if (string.Equals(command, "encrypt", StringComparison.OrdinalIgnoreCase))
+        try
         {
-            return HandleEncryptCommand(commandArgs);
+            var (user, host, port) = ParseUserHostPort(hostArg);
+            var key = ResolveKeyFromArgsOrEnv(args, "--key", "STARRY_MASTER_KEY");
+
+            AnsiConsole.MarkupLine($"[bold yellow]Inspecting and adopting host '[cyan]{user}@{host}:{port}[/]'...[/]");
+
+            var options = new SshNodeOptions { NodeName = host.Replace('.', '-'), Host = host, Port = port, User = user };
+            await using var conn = new SshNodeConnection(options);
+            await conn.InitializeAsync().ConfigureAwait(false);
+
+            var adoptionService = new HostAdoptionService();
+            var adoptionOptions = new AdoptionOptions
+            {
+                OutDir = outDir,
+                Format = format,
+                PullFiles = pullFiles,
+                MasterKey = key
+            };
+
+            await adoptionService.AdoptHostAsync(conn, adoptionOptions).ConfigureAwait(false);
+            AnsiConsole.MarkupLine($"[bold green]✓ Successfully adopted host! Configuration generated in '{Markup.Escape(outDir)}'.[/]");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]Adoption failed: {Markup.Escape(ex.Message)}[/]");
+            return 1;
+        }
+    }
+
+    private static async Task<int> HandleUnmanagedCommandAsync(string[] args)
+    {
+        var configPath = ExtractOptionValue(args, "--config") ?? ".";
+        try
+        {
+            var engine = new VirtualConfigEngine();
+            var tree = engine.Load(configPath);
+            var orchestrator = new ClusterOrchestrator();
+            var nodes = await orchestrator.ResolveNodesAsync(tree).ConfigureAwait(false);
+
+            var adoptionService = new HostAdoptionService();
+            var unmanaged = await adoptionService.ListUnmanagedContainersAsync(nodes, tree).ConfigureAwait(false);
+
+            if (unmanaged.Count == 0)
+            {
+                AnsiConsole.MarkupLine("[green]✓ No unmanaged containers found. All host containers are under Starry GitOps management.[/]");
+                return 0;
+            }
+
+            var table = new Table().Border(TableBorder.Rounded);
+            table.AddColumn("[bold]Node[/]");
+            table.AddColumn("[bold]Container Name[/]");
+            table.AddColumn("[bold]Image[/]");
+            table.AddColumn("[bold]State[/]");
+
+            foreach (var item in unmanaged)
+            {
+                table.AddRow(item.NodeName, item.ContainerName, item.Image, item.State);
+            }
+
+            AnsiConsole.Write(table);
+            AnsiConsole.MarkupLine($"\n[yellow]Found {unmanaged.Count} unmanaged container(s). Run 'starry adopt' to bring them under management.[/]");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]Unmanaged inspection failed: {Markup.Escape(ex.Message)}[/]");
+            return 1;
+        }
+    }
+
+    private static int HandleSecretCommand(string[] args)
+    {
+        var subCommand = args.Length > 0 ? args[0] : "help";
+        var subArgs = args.Length > 1 ? args[1..] : Array.Empty<string>();
+
+        if (string.Equals(subCommand, "keygen", StringComparison.OrdinalIgnoreCase))
+        {
+            var key = CryptoService.GenerateMasterKeyBase64();
+            AnsiConsole.WriteLine(key);
+            return 0;
         }
 
-        if (string.Equals(command, "nodes", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(subCommand, "encrypt", StringComparison.OrdinalIgnoreCase))
         {
-            return HandleNodesCommand(commandArgs, localizer);
+            if (subArgs.Length == 0)
+            {
+                AnsiConsole.MarkupLine("[red]Usage: starry secret encrypt <value> --path <jsonPath> [--key <key>][/]");
+                return 1;
+            }
+
+            var plainText = subArgs[0];
+            var path = ExtractOptionValue(subArgs, "--path") ?? "secret";
+            var key = ResolveKeyFromArgsOrEnv(subArgs, "--key", "STARRY_MASTER_KEY")
+                      ?? throw new InvalidOperationException("Master key not provided. Set STARRY_MASTER_KEY or pass --key.");
+
+            var crypto = new CryptoService();
+            var envelope = crypto.Encrypt(Encoding.UTF8.GetBytes(plainText), key, path);
+            AnsiConsole.WriteLine(envelope.FormatEncrypted());
+            return 0;
         }
 
-        if (string.Equals(command, "plan", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(subCommand, "decrypt", StringComparison.OrdinalIgnoreCase))
         {
-            return HandlePlanCommand(commandArgs);
+            if (subArgs.Length == 0)
+            {
+                AnsiConsole.MarkupLine("[red]Usage: starry secret decrypt <ENC[...]> --path <jsonPath> [--key <key>][/]");
+                return 1;
+            }
+
+            var encText = subArgs[0];
+            var path = ExtractOptionValue(subArgs, "--path") ?? "secret";
+            var key = ResolveKeyFromArgsOrEnv(subArgs, "--key", "STARRY_MASTER_KEY")
+                      ?? throw new InvalidOperationException("Master key not provided. Set STARRY_MASTER_KEY or pass --key.");
+
+            var crypto = new CryptoService();
+            if (!crypto.TryParseEncrypted(encText, out var envelope) || envelope == null)
+            {
+                AnsiConsole.MarkupLine("[red]Invalid ENC[...] envelope format.[/]");
+                return 1;
+            }
+
+            var decrypted = crypto.Decrypt(envelope, key, path);
+            AnsiConsole.WriteLine(Encoding.UTF8.GetString(decrypted));
+            return 0;
         }
 
-        if (string.Equals(command, "apply", StringComparison.OrdinalIgnoreCase))
+        AnsiConsole.MarkupLine("[yellow]Usage: starry secret (keygen|encrypt|decrypt)[/]");
+        return 0;
+    }
+
+    private static async Task<int> HandleAgentCommandAsync(string[] args)
+    {
+        var subCommand = args.Length > 0 ? args[0] : "status";
+
+        if (string.Equals(subCommand, "run", StringComparison.OrdinalIgnoreCase))
         {
-            return HandleApplyCommand(commandArgs);
+            using var cts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
+            await using var daemon = new StarryAgentDaemon();
+            AnsiConsole.MarkupLine("[bold yellow]Starting Starry Agent Daemon...[/] [grey](Press Ctrl+C to stop)[/]");
+            await daemon.RunAsync(new AgentOptions(), cts.Token).ConfigureAwait(false);
+            return 0;
         }
 
-        if (string.Equals(command, "volume", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(subCommand, "install-service", StringComparison.OrdinalIgnoreCase))
         {
-            return HandleVolumeCommand(commandArgs);
+            await using var daemon = new StarryAgentDaemon();
+            await daemon.InstallSystemdServiceAsync().ConfigureAwait(false);
+            AnsiConsole.MarkupLine("[bold green]✓ Successfully installed and started starry-agent.service![/]");
+            return 0;
         }
 
-        if (string.Equals(command, "bundle", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(subCommand, "status", StringComparison.OrdinalIgnoreCase))
         {
-            return HandleBundleCommand(commandArgs);
+            await using var daemon = new StarryAgentDaemon();
+            var report = await daemon.GetStatusAsync().ConfigureAwait(false);
+            AnsiConsole.MarkupLine("[bold yellow]Starry Agent Status:[/]");
+            AnsiConsole.MarkupLine($"  WireGuard Interface: {(report.IsStarry0Active ? "[green]UP[/]" : "[red]DOWN[/]")}");
+            AnsiConsole.MarkupLine($"  Peers Connected: [cyan]{report.Peers.Count}[/]");
+            AnsiConsole.MarkupLine($"  Managed Containers: [cyan]{report.Containers.Count}[/]");
+            return 0;
         }
 
-        return HandleUnknownCommand(command, localizer);
+        AnsiConsole.MarkupLine("[red]Usage: starry agent (run|install-service|status)[/]");
+        return 1;
     }
 
     private static Task<int> HandleConfigCommand(string[] args, ILocalizer localizer)
@@ -206,7 +374,7 @@ internal static class Program
 
     private static int ExecuteConfigValidate(string[] args, ILocalizer localizer)
     {
-        var targetPath = args.Length > 0 ? args[0] : ".";
+        var targetPath = ResolveTargetPath(args);
         try
         {
             var engine = new VirtualConfigEngine();
@@ -252,21 +420,9 @@ internal static class Program
 
     private static int ExecuteConfigPack(string[] args, ILocalizer localizer)
     {
-        var sourceDir = args.Length > 0 ? args[0] : ".";
-        var outputFile = "starry.packed.yaml";
-        var format = "yaml";
-
-        for (var i = 0; i < args.Length; i++)
-        {
-            if (string.Equals(args[i], "-o", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
-            {
-                outputFile = args[i + 1];
-            }
-            else if (string.Equals(args[i], "--format", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
-            {
-                format = args[i + 1];
-            }
-        }
+        var sourceDir = ResolveTargetPath(args);
+        var outputFile = ExtractOptionValue(args, "-o") ?? "starry.packed.yaml";
+        var format = ExtractOptionValue(args, "--format") ?? "yaml";
 
         try
         {
@@ -286,21 +442,9 @@ internal static class Program
 
     private static int ExecuteConfigSplit(string[] args, ILocalizer localizer)
     {
-        var sourceFile = args.Length > 0 ? args[0] : "starry.yaml";
-        var targetDir = "config";
-        var format = "yaml";
-
-        for (var i = 0; i < args.Length; i++)
-        {
-            if (string.Equals(args[i], "-o", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
-            {
-                targetDir = args[i + 1];
-            }
-            else if (string.Equals(args[i], "--format", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
-            {
-                format = args[i + 1];
-            }
-        }
+        var sourceFile = ResolveTargetPath(args, "starry.yaml");
+        var targetDir = ExtractOptionValue(args, "-o") ?? "config";
+        var format = ExtractOptionValue(args, "--format") ?? "yaml";
 
         try
         {
@@ -320,22 +464,29 @@ internal static class Program
 
     private static int ExecuteConfigFmt(string[] args, ILocalizer localizer)
     {
-        if (args.Length == 0)
+        var filePath = ResolveTargetPath(args, string.Empty);
+        if (string.IsNullOrEmpty(filePath))
         {
             AnsiConsole.MarkupLine("[red]Usage: starry config fmt <file> [--format yaml|json|toml][/]");
             return 1;
         }
 
-        var filePath = args[0];
-        var format = "yaml";
-        var ext = Path.GetExtension(filePath);
-        if (string.Equals(ext, ".json", StringComparison.OrdinalIgnoreCase))
+        var format = ExtractOptionValue(args, "--format");
+        if (string.IsNullOrEmpty(format))
         {
-            format = "json";
-        }
-        else if (string.Equals(ext, ".toml", StringComparison.OrdinalIgnoreCase))
-        {
-            format = "toml";
+            var ext = Path.GetExtension(filePath);
+            if (string.Equals(ext, ".json", StringComparison.OrdinalIgnoreCase))
+            {
+                format = "json";
+            }
+            else if (string.Equals(ext, ".toml", StringComparison.OrdinalIgnoreCase))
+            {
+                format = "toml";
+            }
+            else
+            {
+                format = "yaml";
+            }
         }
 
         try
@@ -371,7 +522,7 @@ internal static class Program
 
     private static int ExecuteEncryptOpenSecrets(string[] args)
     {
-        var targetPath = args.FirstOrDefault(a => !a.StartsWith('-')) ?? ".";
+        var targetPath = ResolveTargetPath(args);
         var key = ResolveKeyFromArgsOrEnv(args, "--key", "STARRY_MASTER_KEY");
 
         if (key == null)
@@ -401,13 +552,13 @@ internal static class Program
 
     private static async Task<int> ExecuteGlobalReencryptAsync(string[] args)
     {
-        var oldKey = ResolveKeyFromArgsOrEnv(args, "--old-key", "STARRY_MASTER_KEY_OLD");
-        var newKey = ResolveKeyFromArgsOrEnv(args, "--new-key", "STARRY_MASTER_KEY_NEW");
-        var targetPath = args.FirstOrDefault(a => !a.StartsWith('-') && !string.Equals(a, "global", StringComparison.OrdinalIgnoreCase)) ?? ".";
+        var oldKey = ResolveKeyFromArgsOrEnv(args, "--old-key", "STARRY_MASTER_KEY_OLD", "--old-key-env", "--last-main-key");
+        var newKey = ResolveKeyFromArgsOrEnv(args, "--new-key", "STARRY_MASTER_KEY_NEW", "--new-key-env", "--new-main-key");
+        var targetPath = ResolveTargetPath(args);
 
         if (oldKey == null || newKey == null)
         {
-            AnsiConsole.MarkupLine("[red]Error: Both --old-key (or STARRY_MASTER_KEY_OLD) and --new-key (or STARRY_MASTER_KEY_NEW) are required for global reencryption.[/]");
+            AnsiConsole.MarkupLine("[red]Error: Both old key and new key are required for global re-encryption.[/]");
             return 1;
         }
 
@@ -450,7 +601,7 @@ internal static class Program
         {
             Executable = "gh",
             Arguments = ["secret", "set", secretName],
-            StandardInputBytes = System.Text.Encoding.UTF8.GetBytes(secretValue)
+            StandardInputBytes = Encoding.UTF8.GetBytes(secretValue)
         };
 
         var result = await runner.RunAsync(spec).ConfigureAwait(false);
@@ -489,7 +640,7 @@ internal static class Program
         }
     }
 
-    private static byte[]? ResolveKeyFromArgsOrEnv(string[] args, string flag, string envVar)
+    private static byte[]? ResolveKeyFromArgsOrEnv(string[] args, string flag, string envVar, params string[] aliasFlags)
     {
         var keyVal = ExtractOptionValue(args, flag);
         if (!string.IsNullOrEmpty(keyVal))
@@ -497,13 +648,60 @@ internal static class Program
             return CryptoService.ParseMasterKey(keyVal);
         }
 
-        var envVal = Environment.GetEnvironmentVariable(envVar);
-        if (!string.IsNullOrEmpty(envVal))
+        foreach (var alias in aliasFlags)
         {
-            return CryptoService.ParseMasterKey(envVal);
+            var envName = ExtractOptionValue(args, alias);
+            if (!string.IsNullOrEmpty(envName))
+            {
+                var val = Environment.GetEnvironmentVariable(envName);
+                if (!string.IsNullOrEmpty(val))
+                {
+                    return CryptoService.ParseMasterKey(val);
+                }
+            }
+        }
+
+        var defaultVal = Environment.GetEnvironmentVariable(envVar);
+        if (!string.IsNullOrEmpty(defaultVal))
+        {
+            return CryptoService.ParseMasterKey(defaultVal);
         }
 
         return null;
+    }
+
+    private static string ResolveTargetPath(string[] args, string defaultPath = ".")
+    {
+        var i = 0;
+        while (i < args.Length)
+        {
+            var arg = args[i];
+            if (string.Equals(arg, "global", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(arg, "--reencrypt", StringComparison.OrdinalIgnoreCase))
+            {
+                i++;
+                continue;
+            }
+
+            if (arg.StartsWith('-'))
+            {
+                i += TakesArgument(arg) ? 2 : 1;
+                continue;
+            }
+
+            return arg;
+        }
+
+        return defaultPath;
+    }
+
+    private static bool TakesArgument(string flag)
+    {
+        return flag is "-o" or "--format" or "--config" or "--key" or
+               "--old-key" or "--new-key" or "--old-key-env" or "--new-key-env" or
+               "--last-main-key" or "--new-main-key" or "--update-github-secret" or
+               "--node" or "--old-pubkey" or "--override-ip" or "--lang" or
+               "--name" or "--out-dir" or "--path";
     }
 
     private static string? ExtractOptionValue(string[] args, string optionName)
@@ -524,10 +722,46 @@ internal static class Program
         return null;
     }
 
+    private static (string User, string Host, int Port) ParseUserHostPort(string input)
+    {
+        var user = "root";
+        var host = input;
+        var port = 22;
+
+        if (host.Contains('@', StringComparison.Ordinal))
+        {
+            var parts = host.Split('@', 2);
+            user = parts[0];
+            host = parts[1];
+        }
+
+        if (host.Contains(':', StringComparison.Ordinal))
+        {
+            var parts = host.Split(':', 2);
+            host = parts[0];
+            if (int.TryParse(parts[1], CultureInfo.InvariantCulture, out var p))
+            {
+                port = p;
+            }
+        }
+
+        return (user, host, port);
+    }
+
     private static async Task<int> HandleNodesCommand(string[] args, ILocalizer localizer)
     {
         var subCommand = args.Length > 0 ? args[0] : "list";
         var subArgs = args.Length > 1 ? args[1..] : Array.Empty<string>();
+
+        if (string.Equals(subCommand, "list", StringComparison.OrdinalIgnoreCase))
+        {
+            return await ExecuteNodesListAsync(subArgs).ConfigureAwait(false);
+        }
+
+        if (string.Equals(subCommand, "bootstrap", StringComparison.OrdinalIgnoreCase))
+        {
+            return await ExecuteNodesBootstrapAsync(subArgs).ConfigureAwait(false);
+        }
 
         if (string.Equals(subCommand, "upgrade", StringComparison.OrdinalIgnoreCase))
         {
@@ -541,6 +775,102 @@ internal static class Program
 
         AnsiConsole.MarkupLine($"[yellow]starry nodes[/] - [grey]{Markup.Escape(localizer.GetString(LocalizationKeys.NodesCommandDescription))}[/]");
         return 0;
+    }
+
+    private static async Task<int> ExecuteNodesListAsync(string[] args)
+    {
+        var configPath = ExtractOptionValue(args, "--config") ?? ".";
+        try
+        {
+            var engine = new VirtualConfigEngine();
+            var tree = engine.Load(configPath);
+
+            if (!tree.Root.TryGetPropertyValue("nodes", out var nodesNode) || nodesNode is not JsonObject nodesObj)
+            {
+                AnsiConsole.MarkupLine("[yellow]No nodes defined in cluster configuration.[/]");
+                return 0;
+            }
+
+            var table = new Table().Border(TableBorder.Rounded);
+            table.AddColumn("[bold]Node Name[/]");
+            table.AddColumn("[bold]Host[/]");
+            table.AddColumn("[bold]Port[/]");
+            table.AddColumn("[bold]VPN IP[/]");
+            table.AddColumn("[bold]Public?[/]");
+
+            foreach (var (name, val) in nodesObj)
+            {
+                if (val is JsonObject obj)
+                {
+                    table.AddRow(
+                        name,
+                        obj["host"]?.ToString() ?? "-",
+                        obj["port"]?.ToString() ?? "22",
+                        obj["vpn_ip"]?.ToString() ?? "-",
+                        obj["is_public"]?.ToString() ?? "false");
+                }
+            }
+
+            AnsiConsole.Write(table);
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]Nodes list failed: {Markup.Escape(ex.Message)}[/]");
+            return 1;
+        }
+    }
+
+    private static async Task<int> ExecuteNodesBootstrapAsync(string[] args)
+    {
+        var hostArg = args.FirstOrDefault(a => !a.StartsWith('-'));
+        if (string.IsNullOrEmpty(hostArg))
+        {
+            AnsiConsole.MarkupLine("[red]Usage: starry nodes bootstrap <user@host[:port]> [--name <name>] [--vpn-ip <ip>] [--config <path>][/]");
+            return 1;
+        }
+
+        var (user, host, port) = ParseUserHostPort(hostArg);
+        var nodeName = ExtractOptionValue(args, "--name") ?? host.Replace('.', '-');
+        var vpnIp = ExtractOptionValue(args, "--vpn-ip") ?? ("10" + ".99.0.2");
+        var configPath = ExtractOptionValue(args, "--config") ?? ".";
+
+        try
+        {
+            AnsiConsole.MarkupLine($"[bold yellow]Bootstrapping node '[cyan]{nodeName}[/]' ({user}@{host}:{port})...[/]");
+
+            var options = new SshNodeOptions { NodeName = nodeName, Host = host, Port = port, User = user };
+            await using var conn = new SshNodeConnection(options);
+            await conn.InitializeAsync().ConfigureAwait(false);
+
+            var engine = new VirtualConfigEngine();
+            var tree = engine.Load(configPath);
+
+            var nodeObj = new JsonObject
+            {
+                ["host"] = host,
+                ["port"] = port,
+                ["user"] = user,
+                ["vpn_ip"] = vpnIp,
+                ["is_public"] = false
+            };
+
+            if (tree.Root["nodes"] is not JsonObject nodesRoot)
+            {
+                nodesRoot = new JsonObject();
+                tree.Root["nodes"] = nodesRoot;
+            }
+            nodesRoot[nodeName] = nodeObj;
+
+            engine.Split(tree, configPath, "yaml");
+            AnsiConsole.MarkupLine($"[bold green]✓ Node '{Markup.Escape(nodeName)}' successfully added to configuration and bootstrapped![/]");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]Node bootstrap failed: {Markup.Escape(ex.Message)}[/]");
+            return 1;
+        }
     }
 
     private static async Task<int> ExecuteNodesUpgradeAsync(string[] args)
@@ -628,7 +958,6 @@ internal static class Program
             await using var conn = new SshNodeConnection(new SshNodeOptions { NodeName = nodeName, Host = host, Port = port, User = user });
             var newPrivateKey = await NodeOperationsService.RotateSshKeysAsync(conn, oldPubKey, msg => AnsiConsole.MarkupLine($"[grey]  > {Markup.Escape(msg)}[/]")).ConfigureAwait(false);
 
-            // Update configuration with new plain secret and encrypt if master key is available
             nodeVal["ssh_key"] = $"PLAIN[{newPrivateKey}]";
             var masterKey = ResolveKeyFromArgsOrEnv(args, "--key", "STARRY_MASTER_KEY");
             if (masterKey != null)
@@ -651,96 +980,112 @@ internal static class Program
         }
     }
 
-    private static Task<int> HandlePlanCommand(string[] args)
+    private static async Task<int> HandlePlanCommand(string[] args)
     {
-        var configPath = ExtractOptionValue(args, "--config") ?? ".";
+        var configPath = ResolveTargetPath(args);
         try
         {
             var engine = new VirtualConfigEngine();
             var tree = engine.Load(configPath);
-            var plan = MigrationPlanner.BuildPlan(tree);
 
+            var orchestrator = new ClusterOrchestrator();
+            AnsiConsole.MarkupLine("[grey]Connecting to cluster nodes to discover live container state...[/]");
+            var livePlacements = await orchestrator.DiscoverLiveStateAsync(tree).ConfigureAwait(false);
+
+            var plan = MigrationPlanner.BuildPlan(tree, livePlacements);
             AnsiConsole.MarkupLine($"[bold yellow]STARRY Execution Plan for Cluster:[/] [bold cyan]{Markup.Escape(plan.ClusterName)}[/]\n");
 
             if (!plan.HasChanges)
             {
                 AnsiConsole.MarkupLine("[green]✓ No changes. Your cluster matches the desired configuration.[/]");
-                return Task.FromResult(0);
+                return 0;
             }
 
-            var table = new Table().Border(TableBorder.Rounded);
-            table.AddColumn("[bold]Order[/]");
-            table.AddColumn("[bold]Action Type[/]");
-            table.AddColumn("[bold]Target[/]");
-            table.AddColumn("[bold]Description[/]");
-            table.AddColumn("[bold]Dependencies[/]");
-
-            var step = 1;
-            foreach (var action in plan.Actions)
-            {
-                var typeColor = action.ActionType switch
-                {
-                    PlanActionType.CreateNode => "[green]+ BOOTSTRAP[/]",
-                    PlanActionType.ConfigureWireGuardMesh => "[cyan]~ WIREGUARD[/]",
-                    PlanActionType.ConfigureNftables => "[blue]~ NFTABLES[/]",
-                    PlanActionType.DeployService => "[green]+ DEPLOY[/]",
-                    PlanActionType.MigrateServiceBlueGreen => "[magenta]⇄ BLUE-GREEN[/]",
-                    PlanActionType.UpdateDns => "[yellow]~ DNS[/]",
-                    _ => "[grey]ACTION[/]"
-                };
-
-                var deps = action.Dependencies.Count > 0 ? string.Join(", ", action.Dependencies) : "-";
-                table.AddRow(
-                    step.ToString(CultureInfo.InvariantCulture),
-                    typeColor,
-                    Markup.Escape(action.Target),
-                    Markup.Escape(action.Description),
-                    $"[grey]{Markup.Escape(deps)}[/]");
-                step++;
-            }
-
-            AnsiConsole.Write(table);
-            AnsiConsole.MarkupLine($"\n[bold green]Plan:[/] {plan.Actions.Count} action(s) to execute in DAG dependency order.");
-            return Task.FromResult(0);
+            RenderPlanTable(plan);
+            return 0;
         }
         catch (Exception ex)
         {
             AnsiConsole.MarkupLine($"[red]Plan generation failed: {Markup.Escape(ex.Message)}[/]");
-            return Task.FromResult(1);
+            return 1;
         }
     }
 
-    private static Task<int> HandleApplyCommand(string[] args)
+    private static void RenderPlanTable(MigrationPlan plan)
     {
-        var configPath = ExtractOptionValue(args, "--config") ?? ".";
+        var table = new Table().Border(TableBorder.Rounded);
+        table.AddColumn("[bold]Order[/]");
+        table.AddColumn("[bold]Action Type[/]");
+        table.AddColumn("[bold]Target[/]");
+        table.AddColumn("[bold]Description[/]");
+        table.AddColumn("[bold]Dependencies[/]");
+
+        var step = 1;
+        foreach (var action in plan.Actions)
+        {
+            var typeColor = action.ActionType switch
+            {
+                PlanActionType.CreateNode => "[green]+ BOOTSTRAP[/]",
+                PlanActionType.ConfigureWireGuardMesh => "[cyan]~ WIREGUARD[/]",
+                PlanActionType.ConfigureNftables => "[blue]~ NFTABLES[/]",
+                PlanActionType.DeployService => "[green]+ DEPLOY[/]",
+                PlanActionType.MigrateServiceBlueGreen => "[magenta]⇄ BLUE-GREEN[/]",
+                PlanActionType.UpdateDns => "[yellow]~ DNS[/]",
+                _ => "[grey]ACTION[/]"
+            };
+
+            var deps = action.Dependencies.Count > 0 ? string.Join(", ", action.Dependencies) : "-";
+            table.AddRow(
+                step.ToString(CultureInfo.InvariantCulture),
+                typeColor,
+                Markup.Escape(action.Target),
+                Markup.Escape(action.Description),
+                $"[grey]{Markup.Escape(deps)}[/]");
+            step++;
+        }
+
+        AnsiConsole.Write(table);
+        AnsiConsole.MarkupLine($"\n[bold green]Plan:[/] {plan.Actions.Count} action(s) to execute in DAG dependency order.");
+    }
+
+    private static async Task<int> HandleApplyCommand(string[] args)
+    {
+        var configPath = ResolveTargetPath(args);
         try
         {
             var engine = new VirtualConfigEngine();
             var tree = engine.Load(configPath);
-            var plan = MigrationPlanner.BuildPlan(tree);
+
+            var orchestrator = new ClusterOrchestrator();
+            AnsiConsole.MarkupLine("[grey]Resolving active connections to cluster nodes...[/]");
+            var nodes = await orchestrator.ResolveNodesAsync(tree).ConfigureAwait(false);
+
+            AnsiConsole.MarkupLine("[grey]Discovering live container placements...[/]");
+            var livePlacements = await orchestrator.DiscoverLiveStateAsync(tree).ConfigureAwait(false);
+
+            var plan = MigrationPlanner.BuildPlan(tree, livePlacements);
 
             if (!plan.HasChanges)
             {
-                AnsiConsole.MarkupLine("[green]✓ No changes to apply.[/]");
-                return Task.FromResult(0);
+                AnsiConsole.MarkupLine("[green]✓ No changes to apply. Cluster is in desired state.[/]");
+                return 0;
             }
 
             AnsiConsole.MarkupLine($"[bold yellow]Applying {plan.Actions.Count} planned action(s) to cluster '{Markup.Escape(plan.ClusterName)}'...[/]");
 
-            var step = 1;
-            foreach (var action in plan.Actions)
-            {
-                AnsiConsole.MarkupLine($"[cyan][{step}/{plan.Actions.Count}][/] {Markup.Escape(action.Description)}... [green]DONE[/]");
-                step++;
-            }
+            await orchestrator.ExecutePlanAsync(
+                plan,
+                tree,
+                nodes,
+                msg => AnsiConsole.MarkupLine($"[grey]  > {Markup.Escape(msg)}[/]")).ConfigureAwait(false);
 
             AnsiConsole.MarkupLine("\n[bold green]✓ Apply complete! All resources are in desired state.[/]");
-            return Task.FromResult(0);
+            return 0;
         }
         catch (Exception ex)
         {
             AnsiConsole.MarkupLine($"[red]Apply failed: {Markup.Escape(ex.Message)}[/]");
-            return Task.FromResult(1);
+            return 1;
         }
     }
 
@@ -788,7 +1133,7 @@ internal static class Program
 
     private static int ExecuteBundleExport(string[] subArgs)
     {
-        var configPath = ExtractOptionValue(subArgs, "--config") ?? ".";
+        var configPath = ResolveTargetPath(subArgs);
         var outputFile = ExtractOptionValue(subArgs, "-o") ?? "starry-fleet-bundle.tar.gz";
 
         try
@@ -809,13 +1154,13 @@ internal static class Program
 
     private static int ExecuteBundleImport(string[] subArgs)
     {
-        if (subArgs.Length == 0)
+        var archivePath = ResolveTargetPath(subArgs, string.Empty);
+        if (string.IsNullOrEmpty(archivePath))
         {
             AnsiConsole.MarkupLine("[red]Usage: starry bundle import <archivePath> [-o <targetDir>] [--override-ip <node=ip>][/]");
             return 1;
         }
 
-        var archivePath = subArgs[0];
         var targetDir = ExtractOptionValue(subArgs, "-o") ?? "imported-cluster";
 
         var ipOverrides = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);

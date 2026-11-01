@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Net.Sockets;
 using Starry.Core.Nodes;
@@ -12,8 +13,13 @@ namespace Starry.Infrastructure.Nodes;
 /// </summary>
 public sealed class SshNodeConnection : INodeConnection
 {
+    private static readonly string SshExecutablePath = File.Exists("/usr/bin/ssh") ? "/usr/bin/ssh" : "ssh";
+    private static readonly Uri DefaultRemoteSocketUri = new("http://127.0.0.1/");
+
     private readonly SshNodeOptions _options;
     private readonly IProcessRunner _runner;
+    private readonly List<Process> _tunnelProcesses = [];
+    private readonly List<string> _tempSocketPaths = [];
     private string? _tempKeyPath;
     private string? _controlSocketPath;
     private bool _initialized;
@@ -22,10 +28,6 @@ public sealed class SshNodeConnection : INodeConnection
     public string Host => _options.Host;
     public int Port => _options.Port;
     public string? DistroId { get; private set; }
-
-    private static readonly string SshExecutablePath = File.Exists("/usr/bin/ssh") ? "/usr/bin/ssh" : "ssh";
-    private static readonly Uri DefaultRemoteSocketUri = new("http://127.0.0.1/");
-    private System.Diagnostics.Process? _tunnelProcess;
 
     public SshNodeConnection(SshNodeOptions options, IProcessRunner? runner = null)
     {
@@ -73,6 +75,24 @@ public sealed class SshNodeConnection : INodeConnection
     {
         ArgumentNullException.ThrowIfNull(command);
 
+        var sshSpec = BuildSshProcessSpec(command);
+        return await _runner.RunAsync(sshSpec, ct).ConfigureAwait(false);
+    }
+
+    public async Task<ProcessResult> ExecuteStreamingCommandAsync(
+        ProcessSpec command,
+        Stream? stdinStream,
+        Stream? stdoutStream,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        var sshSpec = BuildSshProcessSpec(command);
+        return await _runner.RunStreamingAsync(sshSpec, stdinStream, stdoutStream, ct).ConfigureAwait(false);
+    }
+
+    private ProcessSpec BuildSshProcessSpec(ProcessSpec command)
+    {
         var sshArgs = new List<string>(BuildSshArguments())
         {
             $"{_options.User}@{_options.Host}",
@@ -84,15 +104,13 @@ public sealed class SshNodeConnection : INodeConnection
             sshArgs.Add(arg);
         }
 
-        var sshSpec = new ProcessSpec
+        return new ProcessSpec
         {
             Executable = SshExecutablePath,
             Arguments = sshArgs,
             StandardInputBytes = command.StandardInputBytes,
             Timeout = command.Timeout
         };
-
-        return await _runner.RunAsync(sshSpec, ct).ConfigureAwait(false);
     }
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope", Justification = "SocketsHttpHandler ownership transferred to HttpClient")]
@@ -101,6 +119,7 @@ public sealed class SshNodeConnection : INodeConnection
         ArgumentException.ThrowIfNullOrWhiteSpace(socketPath);
 
         var localSocketPath = Path.Combine(_options.ControlPathDir, $".sock-{Guid.NewGuid():N}.sock");
+        _tempSocketPaths.Add(localSocketPath);
 
         var tunnelArgs = new List<string>(BuildSshArguments())
         {
@@ -110,7 +129,7 @@ public sealed class SshNodeConnection : INodeConnection
             $"{_options.User}@{_options.Host}"
         };
 
-        var startInfo = new System.Diagnostics.ProcessStartInfo
+        var startInfo = new ProcessStartInfo
         {
             FileName = SshExecutablePath,
             UseShellExecute = false,
@@ -121,8 +140,23 @@ public sealed class SshNodeConnection : INodeConnection
             startInfo.ArgumentList.Add(arg);
         }
 
-        _tunnelProcess = new System.Diagnostics.Process { StartInfo = startInfo };
-        _tunnelProcess.Start();
+        var process = new Process { StartInfo = startInfo };
+        process.Start();
+        _tunnelProcesses.Add(process);
+
+        // Poll up to 10 seconds for the forwarded Unix domain socket to appear
+        var attempts = 0;
+        const int maxAttempts = 200; // 200 * 50ms = 10 seconds
+        while (!File.Exists(localSocketPath) && attempts < maxAttempts)
+        {
+            if (process.HasExited)
+            {
+                throw new InvalidOperationException($"SSH socket tunnel exited prematurely with code {process.ExitCode}.");
+            }
+
+            await Task.Delay(50, ct).ConfigureAwait(false);
+            attempts++;
+        }
 
         var handler = new SocketsHttpHandler
         {
@@ -140,7 +174,7 @@ public sealed class SshNodeConnection : INodeConnection
             BaseAddress = DefaultRemoteSocketUri
         };
 
-        return await Task.FromResult(client).ConfigureAwait(false);
+        return client;
     }
 
     public IReadOnlyList<string> BuildSshArguments()
@@ -179,50 +213,83 @@ public sealed class SshNodeConnection : INodeConnection
 
     public async ValueTask DisposeAsync()
     {
-        if (_tunnelProcess != null)
+        CleanupTunnelProcesses();
+        CleanupTempSockets();
+        await CloseControlMasterAsync().ConfigureAwait(false);
+        CleanupTempKey();
+    }
+
+    private void CleanupTunnelProcesses()
+    {
+        foreach (var tunnel in _tunnelProcesses)
         {
             try
             {
-                if (!_tunnelProcess.HasExited)
+                if (!tunnel.HasExited)
                 {
-                    _tunnelProcess.Kill(entireProcessTree: true);
+                    tunnel.Kill(entireProcessTree: true);
                 }
-                _tunnelProcess.Dispose();
+                tunnel.Dispose();
             }
             catch (InvalidOperationException)
             {
                 // Process already terminated
             }
         }
+        _tunnelProcesses.Clear();
+    }
 
-        if (!string.IsNullOrEmpty(_controlSocketPath) && File.Exists(_controlSocketPath))
+    private void CleanupTempSockets()
+    {
+        foreach (var sockPath in _tempSocketPaths.Where(File.Exists))
         {
-            var closeArgs = new List<string>
-            {
-                "-O", "exit",
-                "-o", $"ControlPath={_controlSocketPath}",
-                $"{_options.User}@{_options.Host}"
-            };
-
             try
             {
-                await _runner.RunAsync(new ProcessSpec
-                {
-                    Executable = SshExecutablePath,
-                    Arguments = closeArgs,
-                    Timeout = TimeSpan.FromSeconds(3)
-                }).ConfigureAwait(false);
+                File.Delete(sockPath);
             }
-            catch (TimeoutException)
+            catch (IOException)
             {
-                // Ignore failure during connection shutdown
-            }
-            catch (InvalidOperationException)
-            {
-                // Ignore failure during connection shutdown
+                // Ignore cleanup error
             }
         }
+        _tempSocketPaths.Clear();
+    }
 
+    private async Task CloseControlMasterAsync()
+    {
+        if (string.IsNullOrEmpty(_controlSocketPath) || !File.Exists(_controlSocketPath))
+        {
+            return;
+        }
+
+        var closeArgs = new List<string>
+        {
+            "-O", "exit",
+            "-o", $"ControlPath={_controlSocketPath}",
+            $"{_options.User}@{_options.Host}"
+        };
+
+        try
+        {
+            await _runner.RunAsync(new ProcessSpec
+            {
+                Executable = SshExecutablePath,
+                Arguments = closeArgs,
+                Timeout = TimeSpan.FromSeconds(3)
+            }).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            // Ignore failure during connection shutdown
+        }
+        catch (InvalidOperationException)
+        {
+            // Ignore failure during connection shutdown
+        }
+    }
+
+    private void CleanupTempKey()
+    {
         if (!string.IsNullOrEmpty(_tempKeyPath) && File.Exists(_tempKeyPath))
         {
             try

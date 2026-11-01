@@ -44,7 +44,14 @@ jobs:
       - name: Verify Native AOT Publish (linux-x64)
         run: dotnet publish src/Starry.Cli/Starry.Cli.csproj -r linux-x64 -c Release -p:PublishAotEnabled=true -o publish-aot
 
+      - name: Upload Native Binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: starry-linux-x64
+          path: publish-aot/starry
+
   distro-matrix:
+    needs: build-and-test
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -61,18 +68,28 @@ jobs:
             pkg: "dnf install -y --allowerasing wireguard-tools nftables"
           - distro: "Alpine 3.20"
             image: "alpine:3.20"
-            pkg: "apk add --no-cache curl wireguard-tools nftables"
+            pkg: "apk add --no-cache curl wireguard-tools nftables gcompat"
           - distro: "Arch Linux"
             image: "archlinux:latest"
             pkg: "pacman -Sy --noconfirm which curl wireguard-tools nftables"
     container:
       image: ${{ matrix.image }}
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download Native Binary
+        uses: actions/download-artifact@v4
+        with:
+          name: starry-linux-x64
+          path: /usr/local/bin
+
       - name: Install System Prerequisites
         run: ${{ matrix.pkg }}
 
-      - name: Verify Host Tools Availability
+      - name: Test Native AOT Binary in Distro Container
         run: |
-          command -v curl || exit 1
-          command -v nft || exit 1
-          command -v wg || command -v wireguard-tools || true
+          chmod +x /usr/local/bin/starry
+          /usr/local/bin/starry --version
+          /usr/local/bin/starry config schema > /dev/null
+          /usr/local/bin/starry plan || true

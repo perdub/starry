@@ -1,0 +1,38 @@
+name: Repository Dump
+
+on:
+  workflow_dispatch:
+    inputs:
+      output_filename:
+        description: 'Output filename for repository dump'
+        required: false
+        default: 'REPO_DUMP.md'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  dump:
+    name: Dump Repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Generate Repository Dump
+        run: |
+          python3 scripts/repo2md.py -o "${{ inputs.output_filename || 'REPO_DUMP.md' }}"
+
+      - name: Upload Repository Dump Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: repo-dump
+          path: ${{ inputs.output_filename || 'REPO_DUMP.md' }}
+          if-no-files-found: error
+          retention-days: 7

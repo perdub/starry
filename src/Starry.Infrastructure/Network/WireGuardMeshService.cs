@@ -79,6 +79,13 @@ public static class WireGuardMeshService
         ArgumentNullException.ThrowIfNull(node);
         ArgumentException.ThrowIfNullOrWhiteSpace(configContent);
 
+        // Backup existing configuration if present for Deadman rollback
+        await node.ExecuteCommandAsync(new ProcessSpec
+        {
+            Executable = "sh",
+            Arguments = ["-c", $"[ -f /etc/wireguard/{InterfaceName}.conf ] && cp /etc/wireguard/{InterfaceName}.conf /etc/wireguard/{InterfaceName}.conf.bak || true"]
+        }, ct).ConfigureAwait(false);
+
         var writeSpec = new ProcessSpec
         {
             Executable = "sh",
@@ -87,14 +94,22 @@ public static class WireGuardMeshService
         };
         await node.ExecuteCommandAsync(writeSpec, ct).ConfigureAwait(false);
 
+        // POSIX-compliant sync without bashism <(...)
         var syncSpec = new ProcessSpec
         {
             Executable = "sh",
-            Arguments = ["-c", $"wg syncconf {InterfaceName} <(wg-quick strip {InterfaceName}) 2>/dev/null || (wg-quick down {InterfaceName} 2>/dev/null; wg-quick up {InterfaceName})"]
+            Arguments = ["-c", $"wg-quick strip {InterfaceName} > /tmp/{InterfaceName}.strip 2>/dev/null && wg syncconf {InterfaceName} /tmp/{InterfaceName}.strip 2>/dev/null && rm -f /tmp/{InterfaceName}.strip || (wg-quick down {InterfaceName} 2>/dev/null; wg-quick up {InterfaceName})"]
         };
         var result = await node.ExecuteCommandAsync(syncSpec, ct).ConfigureAwait(false);
         if (!result.IsSuccess)
         {
+            // Auto rollback to previous config
+            await node.ExecuteCommandAsync(new ProcessSpec
+            {
+                Executable = "sh",
+                Arguments = ["-c", $"[ -f /etc/wireguard/{InterfaceName}.conf.bak ] && cp /etc/wireguard/{InterfaceName}.conf.bak /etc/wireguard/{InterfaceName}.conf && wg-quick up {InterfaceName} || true"]
+            }, ct).ConfigureAwait(false);
+
             throw new InvalidOperationException($"Failed to activate WireGuard interface {InterfaceName} on '{node.NodeName}': {result.StandardError}");
         }
     }
