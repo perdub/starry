@@ -41,53 +41,65 @@ public static class WireGuardMeshService
                     continue;
                 }
 
-                sb.AppendLine(CultureInfo.InvariantCulture, $"# Peer: {peerNode.NodeName}");
-                sb.AppendLine("[Peer]");
-                sb.AppendLine(CultureInfo.InvariantCulture, $"PublicKey = {peerNode.PublicKey}");
-
-                var allowedIps = new List<string> { $"{peerNode.VpnIp}/32" };
-                if (containerVipsPerNode != null &&
-                    containerVipsPerNode.TryGetValue(peerNode.NodeName, out var vips))
-                {
-                    foreach (var vip in vips)
-                    {
-                        allowedIps.Add($"{vip}/32");
-                    }
-                }
-
-                sb.AppendLine(CultureInfo.InvariantCulture, $"AllowedIPs = {string.Join(", ", allowedIps)}");
-
-                if (!string.IsNullOrEmpty(peerNode.Endpoint) && peerNode.IsPublic)
-                {
-                    string ep;
-                    if (peerNode.Endpoint.StartsWith('[') && peerNode.Endpoint.Contains("]:", StringComparison.Ordinal))
-                    {
-                        ep = peerNode.Endpoint;
-                    }
-                    else if (IPAddress.TryParse(peerNode.Endpoint, out var ip) && ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6)
-                    {
-                        ep = $"[{peerNode.Endpoint}]:{peerNode.ListenPort}";
-                    }
-                    else if (peerNode.Endpoint.Contains(':', StringComparison.Ordinal))
-                    {
-                        ep = peerNode.Endpoint;
-                    }
-                    else
-                    {
-                        ep = $"{peerNode.Endpoint}:{peerNode.ListenPort}";
-                    }
-
-                    sb.AppendLine(CultureInfo.InvariantCulture, $"Endpoint = {ep}");
-                }
-
-                sb.AppendLine(CultureInfo.InvariantCulture, $"PersistentKeepalive = {DefaultKeepalive}");
-                sb.AppendLine();
+                AppendPeerBlock(sb, peerNode, containerVipsPerNode);
             }
 
             result[currentNode.NodeName] = sb.ToString();
         }
 
         return result;
+    }
+
+    private static void AppendPeerBlock(
+        StringBuilder sb,
+        WireGuardNodeConfig peerNode,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? containerVipsPerNode)
+    {
+        sb.AppendLine(CultureInfo.InvariantCulture, $"# Peer: {peerNode.NodeName}");
+        sb.AppendLine("[Peer]");
+        sb.AppendLine(CultureInfo.InvariantCulture, $"PublicKey = {peerNode.PublicKey}");
+
+        var allowedIps = new List<string> { $"{peerNode.VpnIp}/32" };
+        if (containerVipsPerNode != null &&
+            containerVipsPerNode.TryGetValue(peerNode.NodeName, out var vips))
+        {
+            foreach (var vip in vips)
+            {
+                allowedIps.Add($"{vip}/32");
+            }
+        }
+
+        sb.AppendLine(CultureInfo.InvariantCulture, $"AllowedIPs = {string.Join(", ", allowedIps)}");
+
+        if (!string.IsNullOrEmpty(peerNode.Endpoint) && peerNode.IsPublic)
+        {
+            var ep = ResolvePeerEndpoint(peerNode);
+            sb.AppendLine(CultureInfo.InvariantCulture, $"Endpoint = {ep}");
+        }
+
+        sb.AppendLine(CultureInfo.InvariantCulture, $"PersistentKeepalive = {DefaultKeepalive}");
+        sb.AppendLine();
+    }
+
+    private static string ResolvePeerEndpoint(WireGuardNodeConfig peerNode)
+    {
+        var ep = peerNode.Endpoint!;
+        if (ep.StartsWith('[') && ep.Contains("]:", StringComparison.Ordinal))
+        {
+            return ep;
+        }
+
+        if (IPAddress.TryParse(ep, out var ip) && ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6)
+        {
+            return $"[{ep}]:{peerNode.ListenPort}";
+        }
+
+        if (ep.Contains(':', StringComparison.Ordinal))
+        {
+            return ep;
+        }
+
+        return $"{ep}:{peerNode.ListenPort}";
     }
 
     public static async Task ApplyConfigurationAsync(

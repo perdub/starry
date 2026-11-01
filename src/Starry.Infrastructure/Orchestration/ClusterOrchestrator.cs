@@ -742,7 +742,7 @@ public sealed partial class ClusterOrchestrator
 
             using var pipeStream = new MemoryStream();
 
-            var safePath = "'" + resolvedPath.Replace("'", "'\\''") + "'";
+            var safePath = "'" + resolvedPath.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
             var saveCmd = $"mkdir -p {safePath} && tar -C {safePath} -cf - . | zstd -3";
             var saveResult = await sourceNode.ExecuteStreamingCommandAsync(new ProcessSpec
             {

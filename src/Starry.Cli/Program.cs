@@ -1183,7 +1183,7 @@ internal static class Program
                 await using var conn = await orchestrator.ResolveNodeConnectionAsync(nodeName, nodeObj).ConfigureAwait(false);
 
                 AnsiConsole.MarkupLine($"[bold yellow]Querying volume files for '[cyan]{Markup.Escape(volumePath)}[/]' on '[cyan]{Markup.Escape(nodeName)}[/]'...[/]");
-                var safeVol = "'" + volumePath.Replace("'", "'\\''") + "'";
+                var safeVol = "'" + volumePath.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
                 var listResult = await conn.ExecuteCommandAsync(new ProcessSpec
                 {
                     Executable = "sh",

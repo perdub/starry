@@ -3,7 +3,7 @@
 ## Overview
 
 - **Total Files**: 139
-- **Total Lines of Code**: 17944
+- **Total Lines of Code**: 17956
 - **Total Size**: 673.9 KB
 - **Root Directory**: `/root/src/starry`
 
@@ -6987,7 +6987,7 @@ starry encrypt global --reencrypt \
 
 ## File: src/Starry.Cli/Program.cs
 
-**Lines**: 1304 | **Size**: 50.4 KB | **Language**: csharp
+**Lines**: 1304 | **Size**: 50.5 KB | **Language**: csharp
 
 ```csharp
 ﻿using System.Globalization;
@@ -8175,7 +8175,7 @@ internal static class Program
                 await using var conn = await orchestrator.ResolveNodeConnectionAsync(nodeName, nodeObj).ConfigureAwait(false);
 
                 AnsiConsole.MarkupLine($"[bold yellow]Querying volume files for '[cyan]{Markup.Escape(volumePath)}[/]' on '[cyan]{Markup.Escape(nodeName)}[/]'...[/]");
-                var safeVol = "'" + volumePath.Replace("'", "'\\''") + "'";
+                var safeVol = "'" + volumePath.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
                 var listResult = await conn.ExecuteCommandAsync(new ProcessSpec
                 {
                     Executable = "sh",
@@ -12356,7 +12356,7 @@ public sealed record PortForwardRule(
 
 ## File: src/Starry.Infrastructure/Network/WireGuardMeshService.cs
 
-**Lines**: 135 | **Size**: 5.8 KB | **Language**: csharp
+**Lines**: 147 | **Size**: 5.8 KB | **Language**: csharp
 
 ```csharp
 using System.Globalization;
@@ -12402,53 +12402,65 @@ public static class WireGuardMeshService
                     continue;
                 }
 
-                sb.AppendLine(CultureInfo.InvariantCulture, $"# Peer: {peerNode.NodeName}");
-                sb.AppendLine("[Peer]");
-                sb.AppendLine(CultureInfo.InvariantCulture, $"PublicKey = {peerNode.PublicKey}");
-
-                var allowedIps = new List<string> { $"{peerNode.VpnIp}/32" };
-                if (containerVipsPerNode != null &&
-                    containerVipsPerNode.TryGetValue(peerNode.NodeName, out var vips))
-                {
-                    foreach (var vip in vips)
-                    {
-                        allowedIps.Add($"{vip}/32");
-                    }
-                }
-
-                sb.AppendLine(CultureInfo.InvariantCulture, $"AllowedIPs = {string.Join(", ", allowedIps)}");
-
-                if (!string.IsNullOrEmpty(peerNode.Endpoint) && peerNode.IsPublic)
-                {
-                    string ep;
-                    if (peerNode.Endpoint.StartsWith('[') && peerNode.Endpoint.Contains("]:", StringComparison.Ordinal))
-                    {
-                        ep = peerNode.Endpoint;
-                    }
-                    else if (IPAddress.TryParse(peerNode.Endpoint, out var ip) && ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6)
-                    {
-                        ep = $"[{peerNode.Endpoint}]:{peerNode.ListenPort}";
-                    }
-                    else if (peerNode.Endpoint.Contains(':', StringComparison.Ordinal))
-                    {
-                        ep = peerNode.Endpoint;
-                    }
-                    else
-                    {
-                        ep = $"{peerNode.Endpoint}:{peerNode.ListenPort}";
-                    }
-
-                    sb.AppendLine(CultureInfo.InvariantCulture, $"Endpoint = {ep}");
-                }
-
-                sb.AppendLine(CultureInfo.InvariantCulture, $"PersistentKeepalive = {DefaultKeepalive}");
-                sb.AppendLine();
+                AppendPeerBlock(sb, peerNode, containerVipsPerNode);
             }
 
             result[currentNode.NodeName] = sb.ToString();
         }
 
         return result;
+    }
+
+    private static void AppendPeerBlock(
+        StringBuilder sb,
+        WireGuardNodeConfig peerNode,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? containerVipsPerNode)
+    {
+        sb.AppendLine(CultureInfo.InvariantCulture, $"# Peer: {peerNode.NodeName}");
+        sb.AppendLine("[Peer]");
+        sb.AppendLine(CultureInfo.InvariantCulture, $"PublicKey = {peerNode.PublicKey}");
+
+        var allowedIps = new List<string> { $"{peerNode.VpnIp}/32" };
+        if (containerVipsPerNode != null &&
+            containerVipsPerNode.TryGetValue(peerNode.NodeName, out var vips))
+        {
+            foreach (var vip in vips)
+            {
+                allowedIps.Add($"{vip}/32");
+            }
+        }
+
+        sb.AppendLine(CultureInfo.InvariantCulture, $"AllowedIPs = {string.Join(", ", allowedIps)}");
+
+        if (!string.IsNullOrEmpty(peerNode.Endpoint) && peerNode.IsPublic)
+        {
+            var ep = ResolvePeerEndpoint(peerNode);
+            sb.AppendLine(CultureInfo.InvariantCulture, $"Endpoint = {ep}");
+        }
+
+        sb.AppendLine(CultureInfo.InvariantCulture, $"PersistentKeepalive = {DefaultKeepalive}");
+        sb.AppendLine();
+    }
+
+    private static string ResolvePeerEndpoint(WireGuardNodeConfig peerNode)
+    {
+        var ep = peerNode.Endpoint!;
+        if (ep.StartsWith('[') && ep.Contains("]:", StringComparison.Ordinal))
+        {
+            return ep;
+        }
+
+        if (IPAddress.TryParse(ep, out var ip) && ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6)
+        {
+            return $"[{ep}]:{peerNode.ListenPort}";
+        }
+
+        if (ep.Contains(':', StringComparison.Ordinal))
+        {
+            return ep;
+        }
+
+        return $"{ep}:{peerNode.ListenPort}";
     }
 
     public static async Task ApplyConfigurationAsync(
@@ -13168,7 +13180,7 @@ public sealed record SshNodeOptions
 
 ## File: src/Starry.Infrastructure/Orchestration/ClusterOrchestrator.cs
 
-**Lines**: 1417 | **Size**: 53.0 KB | **Language**: csharp
+**Lines**: 1417 | **Size**: 53.1 KB | **Language**: csharp
 
 ```csharp
 using System.Globalization;
@@ -13915,7 +13927,7 @@ public sealed partial class ClusterOrchestrator
 
             using var pipeStream = new MemoryStream();
 
-            var safePath = "'" + resolvedPath.Replace("'", "'\\''") + "'";
+            var safePath = "'" + resolvedPath.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
             var saveCmd = $"mkdir -p {safePath} && tar -C {safePath} -cf - . | zstd -3";
             var saveResult = await sourceNode.ExecuteStreamingCommandAsync(new ProcessSpec
             {
