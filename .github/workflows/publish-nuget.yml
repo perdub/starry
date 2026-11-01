@@ -2,14 +2,13 @@ name: Publish NuGet Package
 
 on:
   workflow_dispatch:
-    inputs:
-      version:
-        description: 'Package version to publish'
-        required: false
-        default: '0.1.0'
   push:
     tags:
       - 'v*'
+
+permissions:
+  id-token: write
+  contents: read
 
 jobs:
   publish:
@@ -26,12 +25,15 @@ jobs:
       - name: Build and Pack
         run: dotnet pack src/Starry.Cli/Starry.Cli.csproj --configuration Release -o nupkg
 
-      - name: Push to NuGet.org
-        env:
-          NUGET_KEY: ${{ secrets.NUGET_API_KEY }}
+      - name: NuGet Login (OIDC Trusted Publishing)
+        id: login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ secrets.NUGET_USER || 'perdub' }}
+
+      - name: Push package to NuGet.org
         run: |
-          if [ -n "$NUGET_KEY" ]; then
-            dotnet nuget push nupkg/*.nupkg --api-key "$NUGET_KEY" --source https://api.nuget.org/v3/index.json --skip-duplicate
-          else
-            echo "NUGET_API_KEY secret is not configured in repository secrets."
-          fi
+          dotnet nuget push nupkg/*.nupkg \
+            --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" \
+            --source "https://api.nuget.org/v3/index.json" \
+            --skip-duplicate
