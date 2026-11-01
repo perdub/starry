@@ -1,8 +1,11 @@
 ﻿using System.Reflection;
 using Spectre.Console;
 using Starry.Core.Localization;
+using Starry.Core.Processes;
 using Starry.Infrastructure.Configuration;
 using Starry.Infrastructure.Localization;
+using Starry.Infrastructure.Processes;
+using Starry.Infrastructure.Security;
 
 namespace Starry.Cli;
 
@@ -98,6 +101,7 @@ internal static class Program
         table.AddRow("[cyan]config fmt[/]", localizer.GetString(LocalizationKeys.ConfigFmtDescription));
         table.AddRow("[cyan]config schema[/]", localizer.GetString(LocalizationKeys.ConfigSchemaDescription));
         table.AddRow("[cyan]encrypt[/]", localizer.GetString(LocalizationKeys.EncryptCommandDescription));
+        table.AddRow("[cyan]encrypt global --reencrypt[/]", localizer.GetString(LocalizationKeys.EncryptGlobalDescription));
         table.AddRow("[cyan]nodes[/]", localizer.GetString(LocalizationKeys.NodesCommandDescription));
         table.AddRow("[cyan]plan[/]", localizer.GetString(LocalizationKeys.PlanCommandDescription));
         table.AddRow("[cyan]apply[/]", localizer.GetString(LocalizationKeys.ApplyCommandDescription));
@@ -128,7 +132,7 @@ internal static class Program
 
         if (string.Equals(command, "encrypt", StringComparison.OrdinalIgnoreCase))
         {
-            return HandleEncryptCommand(localizer);
+            return HandleEncryptCommand(commandArgs);
         }
 
         if (string.Equals(command, "nodes", StringComparison.OrdinalIgnoreCase))
@@ -345,10 +349,173 @@ internal static class Program
         }
     }
 
-    private static Task<int> HandleEncryptCommand(ILocalizer localizer)
+    private static async Task<int> HandleEncryptCommand(string[] args)
     {
-        AnsiConsole.MarkupLine($"[yellow]starry encrypt[/] - [grey]{Markup.Escape(localizer.GetString(LocalizationKeys.EncryptCommandDescription))}[/]");
-        return Task.FromResult(0);
+        var isGlobalReencrypt = args.Length >= 2 &&
+                                string.Equals(args[0], "global", StringComparison.OrdinalIgnoreCase) &&
+                                args.Any(a => string.Equals(a, "--reencrypt", StringComparison.OrdinalIgnoreCase));
+
+        if (isGlobalReencrypt)
+        {
+            return await ExecuteGlobalReencryptAsync(args).ConfigureAwait(false);
+        }
+
+        return ExecuteEncryptOpenSecrets(args);
+    }
+
+    private static int ExecuteEncryptOpenSecrets(string[] args)
+    {
+        var targetPath = args.FirstOrDefault(a => !a.StartsWith('-')) ?? ".";
+        var key = ResolveKeyFromArgsOrEnv(args, "--key", "STARRY_MASTER_KEY");
+
+        if (key == null)
+        {
+            var newKey = CryptoService.GenerateMasterKeyBase64();
+            AnsiConsole.MarkupLine($"[yellow]No master key specified. Generated new STARRY_MASTER_KEY:[/] [bold green]{newKey}[/]");
+            AnsiConsole.MarkupLine("[grey]Export this key into your environment: export STARRY_MASTER_KEY=\"...\"[/]");
+            key = CryptoService.ParseMasterKey(newKey);
+        }
+
+        try
+        {
+            var engine = new VirtualConfigEngine();
+            var tree = engine.Load(targetPath);
+            var manager = new SecretManager();
+            var encryptedCount = manager.EncryptOpenSecrets(tree, key, targetPath, engine);
+
+            AnsiConsole.MarkupLine($"[green]✓ Successfully encrypted {encryptedCount} open secret(s) with AES-256-GCM + AAD.[/]");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]Encryption error: {Markup.Escape(ex.Message)}[/]");
+            return 1;
+        }
+    }
+
+    private static async Task<int> ExecuteGlobalReencryptAsync(string[] args)
+    {
+        var oldKey = ResolveKeyFromArgsOrEnv(args, "--old-key", "STARRY_MASTER_KEY_OLD");
+        var newKey = ResolveKeyFromArgsOrEnv(args, "--new-key", "STARRY_MASTER_KEY_NEW");
+        var targetPath = args.FirstOrDefault(a => !a.StartsWith('-') && !string.Equals(a, "global", StringComparison.OrdinalIgnoreCase)) ?? ".";
+
+        if (oldKey == null || newKey == null)
+        {
+            AnsiConsole.MarkupLine("[red]Error: Both --old-key (or STARRY_MASTER_KEY_OLD) and --new-key (or STARRY_MASTER_KEY_NEW) are required for global reencryption.[/]");
+            return 1;
+        }
+
+        var gitCommit = args.Any(a => string.Equals(a, "--git-commit", StringComparison.OrdinalIgnoreCase));
+        var gitPush = args.Any(a => string.Equals(a, "--git-push", StringComparison.OrdinalIgnoreCase));
+        var ghSecretName = ExtractOptionValue(args, "--update-github-secret");
+
+        try
+        {
+            var engine = new VirtualConfigEngine();
+            var tree = engine.Load(targetPath);
+            var manager = new SecretManager();
+            var count = manager.ReencryptAll(tree, oldKey, newKey, targetPath, engine);
+
+            AnsiConsole.MarkupLine($"[green]✓ Re-encrypted {count} secret(s) with new master key.[/]");
+
+            if (!string.IsNullOrEmpty(ghSecretName))
+            {
+                await UpdateGitHubSecretAsync(ghSecretName, Convert.ToBase64String(newKey)).ConfigureAwait(false);
+            }
+
+            if (gitCommit)
+            {
+                await RunGitCommitAndPushAsync(gitPush).ConfigureAwait(false);
+            }
+
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]Global re-encryption failed: {Markup.Escape(ex.Message)}[/]");
+            return 1;
+        }
+    }
+
+    private static async Task UpdateGitHubSecretAsync(string secretName, string secretValue)
+    {
+        var runner = new ProcessRunner();
+        var spec = new ProcessSpec
+        {
+            Executable = "gh",
+            Arguments = ["secret", "set", secretName],
+            StandardInputBytes = System.Text.Encoding.UTF8.GetBytes(secretValue)
+        };
+
+        var result = await runner.RunAsync(spec).ConfigureAwait(false);
+        if (result.IsSuccess)
+        {
+            AnsiConsole.MarkupLine($"[green]✓ Successfully updated GitHub Actions secret '{Markup.Escape(secretName)}'.[/]");
+        }
+        else
+        {
+            AnsiConsole.MarkupLine($"[yellow]Warning: Failed to update GitHub secret: {Markup.Escape(result.StandardError)}[/]");
+        }
+    }
+
+    private static async Task RunGitCommitAndPushAsync(bool push)
+    {
+        var runner = new ProcessRunner();
+        await runner.RunAsync(new ProcessSpec { Executable = "git", Arguments = ["add", "-A"] }).ConfigureAwait(false);
+        var commitRes = await runner.RunAsync(new ProcessSpec
+        {
+            Executable = "git",
+            Arguments = ["commit", "-m", "chore(security): rotate cluster master encryption key [skip ci]"]
+        }).ConfigureAwait(false);
+
+        if (commitRes.IsSuccess)
+        {
+            AnsiConsole.MarkupLine("[green]✓ Created git commit with rotated secrets.[/]");
+        }
+
+        if (push)
+        {
+            var pushRes = await runner.RunAsync(new ProcessSpec { Executable = "git", Arguments = ["push"] }).ConfigureAwait(false);
+            if (pushRes.IsSuccess)
+            {
+                AnsiConsole.MarkupLine("[green]✓ Pushed rotated secrets to remote git repository.[/]");
+            }
+        }
+    }
+
+    private static byte[]? ResolveKeyFromArgsOrEnv(string[] args, string flag, string envVar)
+    {
+        var keyVal = ExtractOptionValue(args, flag);
+        if (!string.IsNullOrEmpty(keyVal))
+        {
+            return CryptoService.ParseMasterKey(keyVal);
+        }
+
+        var envVal = Environment.GetEnvironmentVariable(envVar);
+        if (!string.IsNullOrEmpty(envVal))
+        {
+            return CryptoService.ParseMasterKey(envVal);
+        }
+
+        return null;
+    }
+
+    private static string? ExtractOptionValue(string[] args, string optionName)
+    {
+        for (var i = 0; i < args.Length; i++)
+        {
+            if (string.Equals(args[i], optionName, StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+            {
+                return args[i + 1];
+            }
+
+            if (args[i].StartsWith(optionName + "=", StringComparison.OrdinalIgnoreCase))
+            {
+                return args[i][(optionName.Length + 1)..];
+            }
+        }
+
+        return null;
     }
 
     private static Task<int> HandleNodesCommand(ILocalizer localizer)

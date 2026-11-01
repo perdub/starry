@@ -15,6 +15,7 @@ export default defineConfig({
       themeConfig: {
         nav: [
           { text: 'Быстрый старт', link: '/guide/getting-started' },
+          { text: 'Безопасность', link: '/guide/security-cryptography' },
           { text: 'Архитектура', link: '/architecture/overview' },
           { text: 'Конфигурация', link: '/configuration/syntax' },
           { text: 'Команды CLI', link: '/cli/commands' }
@@ -23,7 +24,8 @@ export default defineConfig({
           {
             text: 'Руководство',
             items: [
-              { text: 'Быстрый старт', link: '/guide/getting-started' }
+              { text: 'Быстрый старт', link: '/guide/getting-started' },
+              { text: 'Безопасность и секреты', link: '/guide/security-cryptography' }
             ]
           },
           {
@@ -67,6 +69,7 @@ export default defineConfig({
       themeConfig: {
         nav: [
           { text: 'Getting Started', link: '/en/guide/getting-started' },
+          { text: 'Security', link: '/en/guide/security-cryptography' },
           { text: 'Architecture', link: '/en/architecture/overview' },
           { text: 'Configuration', link: '/en/configuration/syntax' },
           { text: 'CLI Commands', link: '/en/cli/commands' }
@@ -75,7 +78,8 @@ export default defineConfig({
           {
             text: 'Guide',
             items: [
-              { text: 'Getting Started', link: '/en/guide/getting-started' }
+              { text: 'Getting Started', link: '/en/guide/getting-started' },
+              { text: 'Security & Secrets', link: '/en/guide/security-cryptography' }
             ]
           },
           {

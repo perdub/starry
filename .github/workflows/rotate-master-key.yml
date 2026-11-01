@@ -1,0 +1,52 @@
+name: Monthly Master Key Rotation
+
+on:
+  schedule:
+    # Runs at 00:00 on day 1 of every month
+    - cron: '0 0 1 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  rotate-keys:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Generate New Master Key & Rotate
+        env:
+          STARRY_MASTER_KEY_OLD: ${{ secrets.STARRY_MASTER_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Build starry CLI
+          dotnet build src/Starry.Cli/Starry.Cli.csproj --configuration Release
+
+          # Generate 32-byte cryptographically secure random base64 key
+          NEW_KEY=$(openssl rand -base64 32)
+          export STARRY_MASTER_KEY_NEW="$NEW_KEY"
+
+          # Execute global re-encryption with atomic write, git commit & push
+          dotnet run --project src/Starry.Cli/Starry.Cli.csproj --configuration Release -- \
+            encrypt global --reencrypt \
+            --old-key-env STARRY_MASTER_KEY_OLD \
+            --new-key-env STARRY_MASTER_KEY_NEW \
+            --allow-config-edit \
+            --git-commit \
+            --git-push \
+            --update-github-secret STARRY_MASTER_KEY
