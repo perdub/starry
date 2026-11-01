@@ -110,30 +110,12 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
-      - name: Run Shard 1 (Scenarios 1-6: 2-3 Node Clusters)
-        if: matrix.shard == 1
+      - name: Run Cluster Scenario Shard
         run: |
-          for i in $(seq 1 6); do
-            ./scripts/run-cluster-scenario.sh $i
-          done
-
-      - name: Run Shard 2 (Scenarios 7-12: 4-5 Node Multi-Tier & Kessoku Fleet)
-        if: matrix.shard == 2
-        run: |
-          for i in $(seq 7 12); do
-            ./scripts/run-cluster-scenario.sh $i
-          done
-
-      - name: Run Shard 3 (Scenarios 13-18: Live Chaos Engineering & Disruption)
-        if: matrix.shard == 3
-        run: |
-          for i in $(seq 13 18); do
-            ./scripts/run-cluster-scenario.sh $i
-          done
-
-      - name: Run Shard 4 (Scenarios 19-24: Brownfield Adoption & Zero-Downtime Attach)
-        if: matrix.shard == 4
-        run: |
-          for i in $(seq 19 24); do
+          SHARD=${{ matrix.shard }}
+          START=$(( (SHARD - 1) * 6 + 1 ))
+          END=$(( SHARD * 6 ))
+          echo "Running Shard $SHARD (Scenarios $START to $END)..."
+          for i in $(seq $START $END); do
             ./scripts/run-cluster-scenario.sh $i
           done
