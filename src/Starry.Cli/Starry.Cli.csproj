@@ -11,7 +11,7 @@
     <!-- NuGet Tool Packaging -->
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>starry</ToolCommandName>
-    <PackageId>Starry.Cli</PackageId>
+    <PackageId>starrycli</PackageId>
     <Version>0.1.0</Version>
     <Authors>perdub</Authors>
     <Company>STARRY</Company>
@@ -19,6 +19,7 @@
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/perdub/starry</PackageProjectUrl>
     <RepositoryUrl>https://github.com/perdub/starry</RepositoryUrl>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
 
     <!-- Native AOT Compatibility -->
     <PublishAot>false</PublishAot>
@@ -26,6 +27,10 @@
     <InvariantGlobalization>false</InvariantGlobalization>
     <NoWarn>$(NoWarn);IL2026;IL3050;IL2111;IL2104</NoWarn>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Starry.Core\Starry.Core.csproj" />

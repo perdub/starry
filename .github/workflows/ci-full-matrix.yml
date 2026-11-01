@@ -58,13 +58,13 @@ jobs:
             pkg: "apt-get update && apt-get install -y curl wireguard nftables"
           - distro: "AlmaLinux 9"
             image: "almalinux:9"
-            pkg: "dnf install -y curl wireguard-tools nftables"
+            pkg: "dnf install -y --allowerasing wireguard-tools nftables"
           - distro: "Alpine 3.20"
             image: "alpine:3.20"
             pkg: "apk add --no-cache curl wireguard-tools nftables"
           - distro: "Arch Linux"
             image: "archlinux:latest"
-            pkg: "pacman -Sy --noconfirm curl wireguard-tools nftables"
+            pkg: "pacman -Sy --noconfirm which curl wireguard-tools nftables"
     container:
       image: ${{ matrix.image }}
     steps:
@@ -73,6 +73,6 @@ jobs:
 
       - name: Verify Host Tools Availability
         run: |
-          which curl || exit 1
-          which nft || exit 1
-          which wg || which wireguard-tools || true
+          command -v curl || exit 1
+          command -v nft || exit 1
+          command -v wg || command -v wireguard-tools || true

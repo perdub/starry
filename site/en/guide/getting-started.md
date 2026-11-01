@@ -26,7 +26,7 @@ starry --version
 
 ```bash [.NET Global Tool]
 # Install via .NET SDK (.NET 10+ required)
-dotnet tool install -g Starry.Cli
+dotnet tool install -g starrycli
 
 # Verify command availability
 starry --version
