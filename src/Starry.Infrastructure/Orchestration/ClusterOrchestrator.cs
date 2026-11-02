@@ -493,7 +493,13 @@ public sealed partial class ClusterOrchestrator
             return content;
         }
 
-        var rendered = TemplateTagRegex().Replace(content, match =>
+        var rendered = RenderTemplatePlaceholders(content, config);
+        return DecryptInlineTokens(rendered, canonicalPath);
+    }
+
+    private static string RenderTemplatePlaceholders(string content, ConfigTree config)
+    {
+        return TemplateTagRegex().Replace(content, match =>
         {
             var key = match.Groups["key"].Value.Trim();
             var node = config.FindNode(key);
@@ -516,49 +522,53 @@ public sealed partial class ClusterOrchestrator
 
             return match.Value;
         });
+    }
 
-        if (_masterKey != null)
+    private string DecryptInlineTokens(string content, string? canonicalPath)
+    {
+        if (_masterKey == null)
         {
-            rendered = EncryptedSecretTokenRegex().Replace(rendered, match =>
-            {
-                if (_cryptoService.TryParseEncrypted(match.Value, out var envelope) && envelope != null)
-                {
-                    if (!string.IsNullOrEmpty(canonicalPath))
-                    {
-                        try
-                        {
-                            var bytes = _cryptoService.Decrypt(envelope, _masterKey, canonicalPath);
-                            return Encoding.UTF8.GetString(bytes);
-                        }
-                        catch (CryptographicException)
-                        {
-                            // fallback below
-                        }
-                    }
-
-                    try
-                    {
-                        var bytes = _cryptoService.Decrypt(envelope, _masterKey, string.Empty);
-                        return Encoding.UTF8.GetString(bytes);
-                    }
-                    catch (CryptographicException)
-                    {
-                        return match.Value;
-                    }
-                    catch (FormatException)
-                    {
-                        return match.Value;
-                    }
-                    catch (ArgumentException)
-                    {
-                        return match.Value;
-                    }
-                }
-                return match.Value;
-            });
+            return content;
         }
 
-        return rendered;
+        return EncryptedSecretTokenRegex().Replace(content, match =>
+        {
+            if (!_cryptoService.TryParseEncrypted(match.Value, out var envelope) || envelope == null)
+            {
+                return match.Value;
+            }
+
+            if (!string.IsNullOrEmpty(canonicalPath))
+            {
+                try
+                {
+                    var bytes = _cryptoService.Decrypt(envelope, _masterKey, canonicalPath);
+                    return Encoding.UTF8.GetString(bytes);
+                }
+                catch (CryptographicException)
+                {
+                    // Fall back to empty AAD
+                }
+            }
+
+            try
+            {
+                var bytes = _cryptoService.Decrypt(envelope, _masterKey, string.Empty);
+                return Encoding.UTF8.GetString(bytes);
+            }
+            catch (CryptographicException)
+            {
+                return match.Value;
+            }
+            catch (FormatException)
+            {
+                return match.Value;
+            }
+            catch (ArgumentException)
+            {
+                return match.Value;
+            }
+        });
     }
 
     private ServiceSpec BuildServiceSpec(string serviceName, JsonObject serviceObj, ConfigTree? config = null)
