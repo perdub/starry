@@ -36,5 +36,3 @@ jobs:
         with:
           name: repo-dump
           path: ${{ inputs.output_filename || 'REPO_DUMP.md' }}
-          if-no-files-found: error
-          retention-days: 7

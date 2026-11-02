@@ -7,6 +7,7 @@ Dumps the repository into a single comprehensive Markdown file for LLM analysis.
 import argparse
 import fnmatch
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
@@ -31,6 +32,14 @@ DEFAULT_EXCLUDED_DIRS: Set[str] = {
     ".pytest_cache",
     ".mypy_cache",
     "coverage",
+    "runner-logs",
+    "test-logs",
+}
+
+# Standalone log and diagnostic files to skip from standard repository code listing
+DEFAULT_EXCLUDED_FILES: Set[str] = {
+    "runner-tests.log",
+    "runner.log",
 }
 
 # Binary file extensions to skip
@@ -200,6 +209,9 @@ def should_exclude_path(
             if any(part == ex_norm for part in parts[:-1]):
                 return True
 
+    if not is_dir and (parts[-1] in DEFAULT_EXCLUDED_FILES or parts[-1].endswith(".trx")):
+        return True
+
     # Check custom exclude patterns
     for pat in custom_patterns:
         pat_clean = pat.strip()
@@ -310,6 +322,200 @@ def build_safe_fence(content: str) -> str:
     return "`" * count
 
 
+UNNEEDED_RUNNER_PATTERNS: List[str] = [
+    r"^Build started\b.*",
+    r"^VSTest version\b.*",
+    r"^Starting test execution, please wait\.\.\.",
+    r"^A total of \d+ test files matched\b.*",
+    r"^\[xUnit\.net [^\]]+\]\s+(?:Discovering|Discovered|Starting|Finished):.*",
+    r"^\[xUnit\.net [^\]]+\]\s+xUnit\.net VSTest Adapter.*",
+    r"^Determining projects to restore\.\.\.",
+    r"^All projects are up-to-date for restore\.",
+    r"^Build (?:succeeded|failed)\.",
+    r"^\s*\d+ Warning\(s\)",
+    r"^\s*\d+ Error\(s\)",
+    r"^Time Elapsed\b.*",
+    r"^Microsoft \(R\) Build Engine\b.*",
+    r"^Copyright \(C\) Microsoft Corporation\..*",
+    r"^Restore complete \(\d+ms\)\.",
+]
+
+
+def clean_and_filter_runner_logs(raw_content: str) -> Tuple[str, Dict[str, any]]:
+    """
+    Cleans raw test runner logs by removing ANSI escape sequences, MSBuild banners,
+    VSTest adapter discovery chatter, and restore notices.
+    Preserves test suites, passed/failed statuses, detailed failure stack traces,
+    and summary metrics.
+    """
+    cleaned = re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", raw_content)
+    lines = cleaned.splitlines()
+
+    filtered_lines: List[str] = []
+    failed_tests: List[str] = []
+    in_failure_block = False
+    current_failure_lines: List[str] = []
+
+    passed_individual = 0
+    failed_individual = 0
+    skipped_individual = 0
+
+    passed_summary = 0
+    failed_summary = 0
+    skipped_summary = 0
+    total_summary = 0
+    has_test_run_failed = False
+
+    for line in lines:
+        stripped = line.strip()
+
+        # Filter out unneeded runner noise
+        if any(re.match(pat, stripped) for pat in UNNEEDED_RUNNER_PATTERNS):
+            continue
+
+        # Detect failed test entry
+        if re.match(r"^\s*Failed\s+", line):
+            failed_individual += 1
+            if current_failure_lines:
+                failed_tests.append("\n".join(current_failure_lines))
+                current_failure_lines = []
+            in_failure_block = True
+            current_failure_lines.append(line.strip())
+        elif in_failure_block:
+            if (
+                re.match(r"^\s*Passed\s+", line)
+                or re.match(r"^Test Run (?:Successful|Failed)\.", stripped)
+                or re.match(r"^(?:Failed|Passed)!\s+-", stripped)
+                or stripped.startswith("===")
+            ):
+                in_failure_block = False
+                if current_failure_lines:
+                    failed_tests.append("\n".join(current_failure_lines))
+                    current_failure_lines = []
+            elif stripped:
+                current_failure_lines.append(line.rstrip())
+
+        if re.match(r"^\s*Passed\s+", line):
+            passed_individual += 1
+        elif re.match(r"^\s*Skipped\s+", line):
+            skipped_individual += 1
+
+        if "Test Run Failed" in stripped:
+            has_test_run_failed = True
+
+        m_inline = re.search(
+            r"Failed:\s*(\d+),\s*Passed:\s*(\d+),\s*Skipped:\s*(\d+),\s*Total:\s*(\d+)",
+            stripped,
+        )
+        if m_inline:
+            f, p, s, t = map(int, m_inline.groups())
+            failed_summary += f
+            passed_summary += p
+            skipped_summary += s
+            total_summary += t
+
+        m_tot = re.match(r"^Total tests:\s*(\d+)", stripped)
+        if m_tot:
+            total_summary += int(m_tot.group(1))
+
+        m_pass = re.match(r"^Passed:\s*(\d+)", stripped)
+        if m_pass:
+            passed_summary += int(m_pass.group(1))
+
+        m_fail = re.match(r"^Failed:\s*(\d+)", stripped)
+        if m_fail:
+            failed_summary += int(m_fail.group(1))
+
+        m_skip = re.match(r"^Skipped:\s*(\d+)", stripped)
+        if m_skip:
+            skipped_summary += int(m_skip.group(1))
+
+        filtered_lines.append(line)
+
+    if current_failure_lines:
+        failed_tests.append("\n".join(current_failure_lines))
+
+    compact_lines: List[str] = []
+    prev_blank = False
+    for line in filtered_lines:
+        is_blank = not line.strip()
+        if is_blank and prev_blank:
+            continue
+        compact_lines.append(line)
+        prev_blank = is_blank
+
+    clean_text = "\n".join(compact_lines).strip()
+    total_tests = total_summary or (passed_individual + failed_individual + skipped_individual)
+    passed_tests = passed_summary or passed_individual
+    failed_tests_count = failed_summary or failed_individual or len(failed_tests)
+    skipped_tests = skipped_summary or skipped_individual
+
+    status = "FAILED" if (has_test_run_failed or failed_tests_count > 0 or failed_tests) else "PASSED"
+
+    stats = {
+        "status": status,
+        "passed": passed_tests,
+        "failed": failed_tests_count,
+        "skipped": skipped_tests,
+        "total": total_tests,
+        "failed_details": failed_tests,
+    }
+    return clean_text, stats
+
+
+def load_runner_logs(
+    log_targets: List[str],
+    root_path: Path,
+) -> Optional[Tuple[str, Dict[str, any]]]:
+    """
+    Loads runner logs from provided paths (or discovers default runner logs in repo root).
+    Returns (cleaned_text, stats) or None if no runner logs exist.
+    """
+    discovered_files: List[Path] = []
+
+    for target in log_targets:
+        p = Path(target)
+        if not p.is_absolute():
+            p = (root_path / p).resolve()
+        if p.is_dir():
+            for f in sorted(p.glob("*.log")):
+                discovered_files.append(f)
+        elif p.is_file():
+            discovered_files.append(p)
+
+    if not discovered_files and not log_targets:
+        # Check defaults in root directory
+        for default_name in ["runner-tests.log", "runner.log", "test-logs/runner-tests.log"]:
+            candidate = root_path / default_name
+            if candidate.is_file():
+                discovered_files.append(candidate)
+                break
+
+    if not discovered_files:
+        return None
+
+    raw_chunks: List[str] = []
+    for log_file in discovered_files:
+        try:
+            content = log_file.read_text(encoding="utf-8", errors="replace")
+            try:
+                rel = log_file.relative_to(root_path).as_posix()
+            except ValueError:
+                rel = log_file.name
+            if len(discovered_files) > 1:
+                raw_chunks.append(f"=== Log: {rel} ===\n{content}")
+            else:
+                raw_chunks.append(content)
+        except (OSError, PermissionError) as ex:
+            sys.stderr.write(f"Warning: could not read runner log {log_file}: {ex}\n")
+
+    if not raw_chunks:
+        return None
+
+    combined_raw = "\n\n".join(raw_chunks)
+    return clean_and_filter_runner_logs(combined_raw)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Dump repository contents into a single comprehensive Markdown file for LLM analysis."
@@ -332,6 +538,12 @@ def main() -> int:
         action="append",
         default=[],
         help="Additional glob pattern(s) or names to exclude (can be specified multiple times or comma-separated)",
+    )
+    parser.add_argument(
+        "--runner-logs",
+        action="append",
+        default=[],
+        help="Path(s) to runner log file or directory (can be specified multiple times, auto-detects runner-tests.log if present)",
     )
     parser.add_argument(
         "--include-tree",
@@ -387,6 +599,12 @@ def main() -> int:
 
     print(f"Found {total_files} text/source files ({total_lines} lines, {format_size(total_size)})")
 
+    # Load and filter test runner logs
+    runner_logs_result = load_runner_logs(args.runner_logs, root_path)
+    if runner_logs_result:
+        _, runner_stats = runner_logs_result
+        print(f"Loaded and filtered runner logs: Status={runner_stats['status']} (Passed={runner_stats['passed']}, Failed={runner_stats['failed']})")
+
     # Generate Markdown output
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as out:
@@ -396,6 +614,41 @@ def main() -> int:
         out.write(f"- **Total Lines of Code**: {total_lines}\n")
         out.write(f"- **Total Size**: {format_size(total_size)}\n")
         out.write(f"- **Root Directory**: `{root_path}`\n\n")
+
+        if runner_logs_result:
+            cleaned_runner_text, runner_stats = runner_logs_result
+            out.write("## Test Execution & Diagnostic Logs\n\n")
+            if runner_stats["status"] == "FAILED":
+                out.write("> [!CAUTION]\n")
+                out.write("> **Test Execution Status: FAILED**\n")
+                if runner_stats["total"] > 0:
+                    out.write(
+                        f"> - **Total Tests**: {runner_stats['total']} | **Passed**: {runner_stats['passed']} | **Failed**: {runner_stats['failed']} | **Skipped**: {runner_stats['skipped']}\n"
+                    )
+                out.write("\n")
+                if runner_stats["failed_details"]:
+                    out.write("### ❌ Failed Test Details\n\n")
+                    out.write("```text\n")
+                    for fd in runner_stats["failed_details"]:
+                        out.write(fd.strip() + "\n\n")
+                    out.write("```\n\n")
+            else:
+                out.write("> [!NOTE]\n")
+                out.write("> **Test Execution Status: PASSED**\n")
+                if runner_stats["total"] > 0:
+                    out.write(
+                        f"> - **Total Tests**: {runner_stats['total']} | **Passed**: {runner_stats['passed']} | **Failed**: {runner_stats['failed']} | **Skipped**: {runner_stats['skipped']}\n"
+                    )
+                out.write("\n")
+
+            out.write("### Filtered Test Runner Logs\n\n")
+            fence = build_safe_fence(cleaned_runner_text)
+            out.write(f"{fence}text\n")
+            out.write(cleaned_runner_text)
+            if not cleaned_runner_text.endswith("\n"):
+                out.write("\n")
+            out.write(f"{fence}\n\n")
+            out.write("---\n\n")
 
         if args.include_tree:
             out.write("## Repository Structure\n\n")

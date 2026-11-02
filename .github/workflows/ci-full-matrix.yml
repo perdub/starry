@@ -92,7 +92,10 @@ jobs:
           [ -f /usr/local/bin/starry ] && chmod +x /usr/local/bin/starry || (find /usr/local/bin -name starry -exec cp {} /usr/local/bin/starry \; && chmod +x /usr/local/bin/starry)
           /usr/local/bin/starry --version
           /usr/local/bin/starry config schema > /dev/null
-          /usr/local/bin/starry plan || true
+          mkdir -p /tmp/smoke
+          /usr/local/bin/starry init /tmp/smoke
+          /usr/local/bin/starry config validate /tmp/smoke
+          /usr/local/bin/starry plan /tmp/smoke
 
   live-cluster-matrix:
     needs: build-and-test

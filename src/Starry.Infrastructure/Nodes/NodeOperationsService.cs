@@ -54,12 +54,11 @@ public sealed class NodeOperationsService
 
     public static async Task<string> RotateSshKeysAsync(
         INodeConnection node,
-        string oldPublicKey,
+        string? oldPublicKey = null,
         Action<string>? logger = null,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(node);
-        ArgumentException.ThrowIfNullOrWhiteSpace(oldPublicKey);
 
         logger?.Invoke($"Generating new Ed25519 key pair for node '{node.NodeName}'...");
 
@@ -71,8 +70,11 @@ public sealed class NodeOperationsService
         logger?.Invoke("Verifying connection with the new key...");
         await VerifyNewKeyConnectionAsync(node, privateKey, ct).ConfigureAwait(false);
 
-        logger?.Invoke("Removing obsolete public key from remote authorized_keys...");
-        await RemoveOldKeyAsync(node, oldPublicKey, ct).ConfigureAwait(false);
+        if (!string.IsNullOrWhiteSpace(oldPublicKey))
+        {
+            logger?.Invoke("Removing obsolete public key from remote authorized_keys...");
+            await RemoveOldKeyAsync(node, oldPublicKey, ct).ConfigureAwait(false);
+        }
 
         logger?.Invoke($"SSH key rotation for '{node.NodeName}' completed successfully!");
         return privateKey;

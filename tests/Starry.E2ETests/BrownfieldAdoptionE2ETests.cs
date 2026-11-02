@@ -12,18 +12,31 @@ namespace Starry.E2ETests;
 public class BrownfieldAdoptionE2ETests
 {
     [Fact]
-    public void AdoptionOptions_ConfiguresCorrectly()
+    public async Task Adoption_FullLifecycle_PullsFilesAndGeneratesModularConfig()
     {
-        var options = new AdoptionOptions
-        {
-            OutDir = "./test-config",
-            PullFiles = true,
-            Format = "yaml"
-        };
+        var tempDir = Path.Combine(Path.GetTempPath(), "brownfield_e2e_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
 
-        Assert.Equal("./test-config", options.OutDir);
-        Assert.True(options.PullFiles);
-        Assert.Equal("yaml", options.Format);
+        try
+        {
+            var service = new HostAdoptionService();
+            await using var node = new LocalNodeConnection("local-test");
+
+            var options = new AdoptionOptions
+            {
+                OutDir = tempDir,
+                PullFiles = true,
+                Format = "yaml"
+            };
+
+            var tree = await service.AdoptHostAsync(node, options);
+            Assert.NotNull(tree);
+            Assert.True(File.Exists(Path.Combine(tempDir, "starry.yaml")));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
     }
 
     [Fact]

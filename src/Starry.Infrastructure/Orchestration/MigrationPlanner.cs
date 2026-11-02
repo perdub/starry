@@ -11,7 +11,8 @@ public static class MigrationPlanner
 {
     public static MigrationPlan BuildPlan(
         ConfigTree desiredConfig,
-        IReadOnlyDictionary<string, string>? currentServiceNodePlacements = null)
+        IReadOnlyDictionary<string, string>? currentServiceNodePlacements = null,
+        bool onlyChangedServices = false)
     {
         ArgumentNullException.ThrowIfNull(desiredConfig);
 
@@ -20,7 +21,7 @@ public static class MigrationPlanner
 
         var nodeCount = PlanNodeActions(desiredConfig, actions);
         PlanNetworkActions(nodeCount, actions);
-        PlanServiceActions(desiredConfig, currentServiceNodePlacements, actions);
+        PlanServiceActions(desiredConfig, currentServiceNodePlacements, actions, onlyChangedServices);
 
         var sortedActions = actions
             .OrderBy(a => a.Priority)
@@ -78,7 +79,8 @@ public static class MigrationPlanner
     private static void PlanServiceActions(
         ConfigTree desiredConfig,
         IReadOnlyDictionary<string, string>? currentServiceNodePlacements,
-        List<PlanAction> actions)
+        List<PlanAction> actions,
+        bool onlyChangedServices = false)
     {
         if (!desiredConfig.Root.TryGetPropertyValue("services", out var servicesNode) || servicesNode is not JsonObject servicesObj)
         {
@@ -104,6 +106,15 @@ public static class MigrationPlanner
             var hasOldPlacement = targetNode != null &&
                                   placements.TryGetValue(svcName, out var currentNode) &&
                                   !string.Equals(currentNode, targetNode, StringComparison.OrdinalIgnoreCase);
+
+            var isAlreadyConverged = targetNode != null &&
+                                     placements.TryGetValue(svcName, out var runningNode) &&
+                                     string.Equals(runningNode, targetNode, StringComparison.OrdinalIgnoreCase);
+
+            if (onlyChangedServices && isAlreadyConverged)
+            {
+                continue;
+            }
 
             if (hasOldPlacement)
             {

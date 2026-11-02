@@ -486,7 +486,7 @@ public sealed partial class ClusterOrchestrator
     [GeneratedRegex(@"ENC\[AES256_GCM:v1:[^\]]+\]", RegexOptions.None, matchTimeoutMilliseconds: 1000)]
     private static partial Regex EncryptedSecretTokenRegex();
 
-    public string RenderTemplateAndDecryptInlineSecrets(string content, ConfigTree config)
+    public string RenderTemplateAndDecryptInlineSecrets(string content, ConfigTree config, string? canonicalPath = null)
     {
         if (string.IsNullOrEmpty(content))
         {
@@ -523,6 +523,19 @@ public sealed partial class ClusterOrchestrator
             {
                 if (_cryptoService.TryParseEncrypted(match.Value, out var envelope) && envelope != null)
                 {
+                    if (!string.IsNullOrEmpty(canonicalPath))
+                    {
+                        try
+                        {
+                            var bytes = _cryptoService.Decrypt(envelope, _masterKey, canonicalPath);
+                            return Encoding.UTF8.GetString(bytes);
+                        }
+                        catch (CryptographicException)
+                        {
+                            // fallback below
+                        }
+                    }
+
                     try
                     {
                         var bytes = _cryptoService.Decrypt(envelope, _masterKey, string.Empty);
@@ -621,7 +634,7 @@ public sealed partial class ClusterOrchestrator
                 var decrypted = DecryptSecretString(rawVal, $"services.{serviceName}.{envPropName}.{k}", $"services.{serviceName}.env.{k}");
                 if (config != null)
                 {
-                    decrypted = RenderTemplateAndDecryptInlineSecrets(decrypted, config);
+                    decrypted = RenderTemplateAndDecryptInlineSecrets(decrypted, config, $"services.{serviceName}.{envPropName}.{k}");
                 }
                 result[k] = decrypted;
             }
@@ -655,7 +668,7 @@ public sealed partial class ClusterOrchestrator
 
                 if (config != null)
                 {
-                    fileContent = RenderTemplateAndDecryptInlineSecrets(fileContent, config);
+                    fileContent = RenderTemplateAndDecryptInlineSecrets(fileContent, config, $"services.{serviceName}.files.{destPath}");
                 }
                 else
                 {

@@ -3,8 +3,8 @@
 ## Overview
 
 - **Total Files**: 139
-- **Total Lines of Code**: 17956
-- **Total Size**: 673.9 KB
+- **Total Lines of Code**: 18558
+- **Total Size**: 698.4 KB
 - **Root Directory**: `/root/src/starry`
 
 ## Repository Structure
@@ -731,7 +731,7 @@ Licensed under the [MIT License](LICENSE).
 
 ## File: .github/workflows/ci-full-matrix.yml
 
-**Lines**: 121 | **Size**: 3.9 KB | **Language**: yaml
+**Lines**: 124 | **Size**: 4.1 KB | **Language**: yaml
 
 ```yaml
 name: Full Multi-Distro Matrix & Chaos CI
@@ -828,7 +828,10 @@ jobs:
           [ -f /usr/local/bin/starry ] && chmod +x /usr/local/bin/starry || (find /usr/local/bin -name starry -exec cp {} /usr/local/bin/starry \; && chmod +x /usr/local/bin/starry)
           /usr/local/bin/starry --version
           /usr/local/bin/starry config schema > /dev/null
-          /usr/local/bin/starry plan || true
+          mkdir -p /tmp/smoke
+          /usr/local/bin/starry init /tmp/smoke
+          /usr/local/bin/starry config validate /tmp/smoke
+          /usr/local/bin/starry plan /tmp/smoke
 
   live-cluster-matrix:
     needs: build-and-test
@@ -859,7 +862,7 @@ jobs:
 
 ## File: .github/workflows/ci.yml
 
-**Lines**: 35 | **Size**: 1.1 KB | **Language**: yaml
+**Lines**: 79 | **Size**: 2.6 KB | **Language**: yaml
 
 ```yaml
 name: CI
@@ -883,20 +886,64 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
       - name: Restore dependencies
         run: dotnet restore Starry.slnx
 
       - name: Build solution (TreatWarningsAsErrors)
         run: dotnet build Starry.slnx --configuration Release --no-restore
 
-      - name: Run unit & chaos tests
+      - name: Run unit, chaos & E2E tests
+        id: run-tests
         run: |
-          dotnet test tests/Starry.UnitTests/Starry.UnitTests.csproj --configuration Release --no-build --verbosity normal
-          dotnet test tests/Starry.ChaosTests/Starry.ChaosTests.csproj --configuration Release --no-build --verbosity normal
-          dotnet test tests/Starry.E2ETests/Starry.E2ETests.csproj --configuration Release --no-build --verbosity normal
+          set +e
+          TEST_EXIT_CODE=0
+
+          echo "=== Running Unit Tests ===" | tee runner-tests.log
+          dotnet test tests/Starry.UnitTests/Starry.UnitTests.csproj --configuration Release --no-build --verbosity normal 2>&1 | tee -a runner-tests.log
+          if [ ${PIPESTATUS[0]} -ne 0 ]; then TEST_EXIT_CODE=1; fi
+
+          echo "=== Running Chaos Tests ===" | tee -a runner-tests.log
+          dotnet test tests/Starry.ChaosTests/Starry.ChaosTests.csproj --configuration Release --no-build --verbosity normal 2>&1 | tee -a runner-tests.log
+          if [ ${PIPESTATUS[0]} -ne 0 ]; then TEST_EXIT_CODE=1; fi
+
+          echo "=== Running E2E Tests ===" | tee -a runner-tests.log
+          dotnet test tests/Starry.E2ETests/Starry.E2ETests.csproj --configuration Release --no-build --verbosity normal 2>&1 | tee -a runner-tests.log
+          if [ ${PIPESTATUS[0]} -ne 0 ]; then TEST_EXIT_CODE=1; fi
+
+          echo "exit_code=$TEST_EXIT_CODE" >> "$GITHUB_OUTPUT"
 
       - name: Pack NuGet Tool
+        if: steps.run-tests.outputs.exit_code == '0'
         run: dotnet pack src/Starry.Cli/Starry.Cli.csproj --configuration Release --no-build -o nupkg
+
+      - name: Generate Repository Dump with Test Runner Logs
+        if: always()
+        run: |
+          python3 scripts/repo2md.py -o REPO_DUMP.md --runner-logs runner-tests.log
+
+      - name: Upload Repository Dump & Runner Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: repo-dump
+          path: |
+            REPO_DUMP.md
+            runner-tests.log
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Check Test Results Status
+        if: always()
+        run: |
+          if [ "${{ steps.run-tests.outputs.exit_code }}" != "0" ]; then
+            echo "::error::One or more test suites failed on the runner. Check REPO_DUMP.md and runner logs for details."
+            exit 1
+          fi
 ```
 
 ## File: .github/workflows/docs-pages.yml
@@ -1013,7 +1060,7 @@ jobs:
 
 ## File: .github/workflows/repo-dump.yml
 
-**Lines**: 40 | **Size**: 938 B | **Language**: yaml
+**Lines**: 38 | **Size**: 875 B | **Language**: yaml
 
 ```yaml
 name: Repository Dump
@@ -1054,8 +1101,6 @@ jobs:
         with:
           name: repo-dump
           path: ${{ inputs.output_filename || 'REPO_DUMP.md' }}
-          if-no-files-found: error
-          retention-days: 7
 ```
 
 ## File: .github/workflows/rotate-master-key.yml
@@ -1135,7 +1180,7 @@ python3 "$SCRIPT_DIR/repo2md.py" --root "$REPO_ROOT" "$@"
 
 ## File: scripts/repo2md.py
 
-**Lines**: 424 | **Size**: 12.4 KB | **Language**: python
+**Lines**: 677 | **Size**: 21.5 KB | **Language**: python
 
 ````python
 #!/usr/bin/env python3
@@ -1147,6 +1192,7 @@ Dumps the repository into a single comprehensive Markdown file for LLM analysis.
 import argparse
 import fnmatch
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
@@ -1171,6 +1217,14 @@ DEFAULT_EXCLUDED_DIRS: Set[str] = {
     ".pytest_cache",
     ".mypy_cache",
     "coverage",
+    "runner-logs",
+    "test-logs",
+}
+
+# Standalone log and diagnostic files to skip from standard repository code listing
+DEFAULT_EXCLUDED_FILES: Set[str] = {
+    "runner-tests.log",
+    "runner.log",
 }
 
 # Binary file extensions to skip
@@ -1340,6 +1394,9 @@ def should_exclude_path(
             if any(part == ex_norm for part in parts[:-1]):
                 return True
 
+    if not is_dir and (parts[-1] in DEFAULT_EXCLUDED_FILES or parts[-1].endswith(".trx")):
+        return True
+
     # Check custom exclude patterns
     for pat in custom_patterns:
         pat_clean = pat.strip()
@@ -1450,6 +1507,200 @@ def build_safe_fence(content: str) -> str:
     return "`" * count
 
 
+UNNEEDED_RUNNER_PATTERNS: List[str] = [
+    r"^Build started\b.*",
+    r"^VSTest version\b.*",
+    r"^Starting test execution, please wait\.\.\.",
+    r"^A total of \d+ test files matched\b.*",
+    r"^\[xUnit\.net [^\]]+\]\s+(?:Discovering|Discovered|Starting|Finished):.*",
+    r"^\[xUnit\.net [^\]]+\]\s+xUnit\.net VSTest Adapter.*",
+    r"^Determining projects to restore\.\.\.",
+    r"^All projects are up-to-date for restore\.",
+    r"^Build (?:succeeded|failed)\.",
+    r"^\s*\d+ Warning\(s\)",
+    r"^\s*\d+ Error\(s\)",
+    r"^Time Elapsed\b.*",
+    r"^Microsoft \(R\) Build Engine\b.*",
+    r"^Copyright \(C\) Microsoft Corporation\..*",
+    r"^Restore complete \(\d+ms\)\.",
+]
+
+
+def clean_and_filter_runner_logs(raw_content: str) -> Tuple[str, Dict[str, any]]:
+    """
+    Cleans raw test runner logs by removing ANSI escape sequences, MSBuild banners,
+    VSTest adapter discovery chatter, and restore notices.
+    Preserves test suites, passed/failed statuses, detailed failure stack traces,
+    and summary metrics.
+    """
+    cleaned = re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", raw_content)
+    lines = cleaned.splitlines()
+
+    filtered_lines: List[str] = []
+    failed_tests: List[str] = []
+    in_failure_block = False
+    current_failure_lines: List[str] = []
+
+    passed_individual = 0
+    failed_individual = 0
+    skipped_individual = 0
+
+    passed_summary = 0
+    failed_summary = 0
+    skipped_summary = 0
+    total_summary = 0
+    has_test_run_failed = False
+
+    for line in lines:
+        stripped = line.strip()
+
+        # Filter out unneeded runner noise
+        if any(re.match(pat, stripped) for pat in UNNEEDED_RUNNER_PATTERNS):
+            continue
+
+        # Detect failed test entry
+        if re.match(r"^\s*Failed\s+", line):
+            failed_individual += 1
+            if current_failure_lines:
+                failed_tests.append("\n".join(current_failure_lines))
+                current_failure_lines = []
+            in_failure_block = True
+            current_failure_lines.append(line.strip())
+        elif in_failure_block:
+            if (
+                re.match(r"^\s*Passed\s+", line)
+                or re.match(r"^Test Run (?:Successful|Failed)\.", stripped)
+                or re.match(r"^(?:Failed|Passed)!\s+-", stripped)
+                or stripped.startswith("===")
+            ):
+                in_failure_block = False
+                if current_failure_lines:
+                    failed_tests.append("\n".join(current_failure_lines))
+                    current_failure_lines = []
+            elif stripped:
+                current_failure_lines.append(line.rstrip())
+
+        if re.match(r"^\s*Passed\s+", line):
+            passed_individual += 1
+        elif re.match(r"^\s*Skipped\s+", line):
+            skipped_individual += 1
+
+        if "Test Run Failed" in stripped:
+            has_test_run_failed = True
+
+        m_inline = re.search(
+            r"Failed:\s*(\d+),\s*Passed:\s*(\d+),\s*Skipped:\s*(\d+),\s*Total:\s*(\d+)",
+            stripped,
+        )
+        if m_inline:
+            f, p, s, t = map(int, m_inline.groups())
+            failed_summary += f
+            passed_summary += p
+            skipped_summary += s
+            total_summary += t
+
+        m_tot = re.match(r"^Total tests:\s*(\d+)", stripped)
+        if m_tot:
+            total_summary += int(m_tot.group(1))
+
+        m_pass = re.match(r"^Passed:\s*(\d+)", stripped)
+        if m_pass:
+            passed_summary += int(m_pass.group(1))
+
+        m_fail = re.match(r"^Failed:\s*(\d+)", stripped)
+        if m_fail:
+            failed_summary += int(m_fail.group(1))
+
+        m_skip = re.match(r"^Skipped:\s*(\d+)", stripped)
+        if m_skip:
+            skipped_summary += int(m_skip.group(1))
+
+        filtered_lines.append(line)
+
+    if current_failure_lines:
+        failed_tests.append("\n".join(current_failure_lines))
+
+    compact_lines: List[str] = []
+    prev_blank = False
+    for line in filtered_lines:
+        is_blank = not line.strip()
+        if is_blank and prev_blank:
+            continue
+        compact_lines.append(line)
+        prev_blank = is_blank
+
+    clean_text = "\n".join(compact_lines).strip()
+    total_tests = total_summary or (passed_individual + failed_individual + skipped_individual)
+    passed_tests = passed_summary or passed_individual
+    failed_tests_count = failed_summary or failed_individual or len(failed_tests)
+    skipped_tests = skipped_summary or skipped_individual
+
+    status = "FAILED" if (has_test_run_failed or failed_tests_count > 0 or failed_tests) else "PASSED"
+
+    stats = {
+        "status": status,
+        "passed": passed_tests,
+        "failed": failed_tests_count,
+        "skipped": skipped_tests,
+        "total": total_tests,
+        "failed_details": failed_tests,
+    }
+    return clean_text, stats
+
+
+def load_runner_logs(
+    log_targets: List[str],
+    root_path: Path,
+) -> Optional[Tuple[str, Dict[str, any]]]:
+    """
+    Loads runner logs from provided paths (or discovers default runner logs in repo root).
+    Returns (cleaned_text, stats) or None if no runner logs exist.
+    """
+    discovered_files: List[Path] = []
+
+    for target in log_targets:
+        p = Path(target)
+        if not p.is_absolute():
+            p = (root_path / p).resolve()
+        if p.is_dir():
+            for f in sorted(p.glob("*.log")):
+                discovered_files.append(f)
+        elif p.is_file():
+            discovered_files.append(p)
+
+    if not discovered_files and not log_targets:
+        # Check defaults in root directory
+        for default_name in ["runner-tests.log", "runner.log", "test-logs/runner-tests.log"]:
+            candidate = root_path / default_name
+            if candidate.is_file():
+                discovered_files.append(candidate)
+                break
+
+    if not discovered_files:
+        return None
+
+    raw_chunks: List[str] = []
+    for log_file in discovered_files:
+        try:
+            content = log_file.read_text(encoding="utf-8", errors="replace")
+            try:
+                rel = log_file.relative_to(root_path).as_posix()
+            except ValueError:
+                rel = log_file.name
+            if len(discovered_files) > 1:
+                raw_chunks.append(f"=== Log: {rel} ===\n{content}")
+            else:
+                raw_chunks.append(content)
+        except (OSError, PermissionError) as ex:
+            sys.stderr.write(f"Warning: could not read runner log {log_file}: {ex}\n")
+
+    if not raw_chunks:
+        return None
+
+    combined_raw = "\n\n".join(raw_chunks)
+    return clean_and_filter_runner_logs(combined_raw)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Dump repository contents into a single comprehensive Markdown file for LLM analysis."
@@ -1472,6 +1723,12 @@ def main() -> int:
         action="append",
         default=[],
         help="Additional glob pattern(s) or names to exclude (can be specified multiple times or comma-separated)",
+    )
+    parser.add_argument(
+        "--runner-logs",
+        action="append",
+        default=[],
+        help="Path(s) to runner log file or directory (can be specified multiple times, auto-detects runner-tests.log if present)",
     )
     parser.add_argument(
         "--include-tree",
@@ -1527,6 +1784,12 @@ def main() -> int:
 
     print(f"Found {total_files} text/source files ({total_lines} lines, {format_size(total_size)})")
 
+    # Load and filter test runner logs
+    runner_logs_result = load_runner_logs(args.runner_logs, root_path)
+    if runner_logs_result:
+        _, runner_stats = runner_logs_result
+        print(f"Loaded and filtered runner logs: Status={runner_stats['status']} (Passed={runner_stats['passed']}, Failed={runner_stats['failed']})")
+
     # Generate Markdown output
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as out:
@@ -1536,6 +1799,41 @@ def main() -> int:
         out.write(f"- **Total Lines of Code**: {total_lines}\n")
         out.write(f"- **Total Size**: {format_size(total_size)}\n")
         out.write(f"- **Root Directory**: `{root_path}`\n\n")
+
+        if runner_logs_result:
+            cleaned_runner_text, runner_stats = runner_logs_result
+            out.write("## Test Execution & Diagnostic Logs\n\n")
+            if runner_stats["status"] == "FAILED":
+                out.write("> [!CAUTION]\n")
+                out.write("> **Test Execution Status: FAILED**\n")
+                if runner_stats["total"] > 0:
+                    out.write(
+                        f"> - **Total Tests**: {runner_stats['total']} | **Passed**: {runner_stats['passed']} | **Failed**: {runner_stats['failed']} | **Skipped**: {runner_stats['skipped']}\n"
+                    )
+                out.write("\n")
+                if runner_stats["failed_details"]:
+                    out.write("### ❌ Failed Test Details\n\n")
+                    out.write("```text\n")
+                    for fd in runner_stats["failed_details"]:
+                        out.write(fd.strip() + "\n\n")
+                    out.write("```\n\n")
+            else:
+                out.write("> [!NOTE]\n")
+                out.write("> **Test Execution Status: PASSED**\n")
+                if runner_stats["total"] > 0:
+                    out.write(
+                        f"> - **Total Tests**: {runner_stats['total']} | **Passed**: {runner_stats['passed']} | **Failed**: {runner_stats['failed']} | **Skipped**: {runner_stats['skipped']}\n"
+                    )
+                out.write("\n")
+
+            out.write("### Filtered Test Runner Logs\n\n")
+            fence = build_safe_fence(cleaned_runner_text)
+            out.write(f"{fence}text\n")
+            out.write(cleaned_runner_text)
+            if not cleaned_runner_text.endswith("\n"):
+                out.write("\n")
+            out.write(f"{fence}\n\n")
+            out.write("---\n\n")
 
         if args.include_tree:
             out.write("## Repository Structure\n\n")
@@ -1566,7 +1864,7 @@ if __name__ == "__main__":
 
 ## File: scripts/run-cluster-scenario.sh
 
-**Lines**: 29 | **Size**: 1.1 KB | **Language**: bash
+**Lines**: 40 | **Size**: 1.6 KB | **Language**: bash
 
 ```bash
 #!/usr/bin/env bash
@@ -1580,18 +1878,29 @@ echo "=========================================================="
 
 cleanup() {
     echo "[TEARDOWN] Cleaning up cluster scenario ${SCENARIO_ID}..."
-    ip link del starry-test-br 2>/dev/null || true
     rm -rf /tmp/starry-cluster-* /tmp/starry-scen-* 2>/dev/null || true
+    if command -v docker >/dev/null 2>&1; then
+        docker rm -f starry-live-box 2>/dev/null || true
+        docker network rm starry-live-net 2>/dev/null || true
+    fi
     echo "[TEARDOWN] Done."
 }
 
 trap cleanup EXIT INT TERM
 
+# If Docker daemon is active on the runner, spin up lightweight live test container
+if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+    echo "[DOCKER] Docker daemon active. Setting up isolated live verification container..."
+    docker network create starry-live-net 2>/dev/null || true
+    docker run -d --name starry-live-box --network starry-live-net \
+        -e TEST_PASS=secret-db-pass \
+        alpine:3.20 sleep 3600 2>/dev/null || true
+fi
+
 if [ "$SCENARIO_ID" = "all" ]; then
     echo "Running all 24 cluster scenarios..."
     dotnet test tests/Starry.E2ETests/Starry.E2ETests.csproj --filter FullyQualifiedName~ClusterMatrixFuzzerTests -p:RunAnalyzers=false
 else
-    # Pad single digit with zero if needed (e.g. 1 -> 01)
     FORMATTED_ID=$(printf "%02d" "$SCENARIO_ID")
     echo "Running Scenario ${FORMATTED_ID}..."
     dotnet test tests/Starry.E2ETests/Starry.E2ETests.csproj --filter FullyQualifiedName~Scenario${FORMATTED_ID} -p:RunAnalyzers=false
@@ -12630,7 +12939,7 @@ public sealed class LocalNodeConnection : INodeConnection
 
 ## File: src/Starry.Infrastructure/Nodes/NodeOperationsService.cs
 
-**Lines**: 212 | **Size**: 8.1 KB | **Language**: csharp
+**Lines**: 214 | **Size**: 8.1 KB | **Language**: csharp
 
 ```csharp
 using System.Globalization;
@@ -12689,12 +12998,11 @@ public sealed class NodeOperationsService
 
     public static async Task<string> RotateSshKeysAsync(
         INodeConnection node,
-        string oldPublicKey,
+        string? oldPublicKey = null,
         Action<string>? logger = null,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(node);
-        ArgumentException.ThrowIfNullOrWhiteSpace(oldPublicKey);
 
         logger?.Invoke($"Generating new Ed25519 key pair for node '{node.NodeName}'...");
 
@@ -12706,8 +13014,11 @@ public sealed class NodeOperationsService
         logger?.Invoke("Verifying connection with the new key...");
         await VerifyNewKeyConnectionAsync(node, privateKey, ct).ConfigureAwait(false);
 
-        logger?.Invoke("Removing obsolete public key from remote authorized_keys...");
-        await RemoveOldKeyAsync(node, oldPublicKey, ct).ConfigureAwait(false);
+        if (!string.IsNullOrWhiteSpace(oldPublicKey))
+        {
+            logger?.Invoke("Removing obsolete public key from remote authorized_keys...");
+            await RemoveOldKeyAsync(node, oldPublicKey, ct).ConfigureAwait(false);
+        }
 
         logger?.Invoke($"SSH key rotation for '{node.NodeName}' completed successfully!");
         return privateKey;
@@ -13180,7 +13491,7 @@ public sealed record SshNodeOptions
 
 ## File: src/Starry.Infrastructure/Orchestration/ClusterOrchestrator.cs
 
-**Lines**: 1417 | **Size**: 53.1 KB | **Language**: csharp
+**Lines**: 1430 | **Size**: 53.7 KB | **Language**: csharp
 
 ```csharp
 using System.Globalization;
@@ -13671,7 +13982,7 @@ public sealed partial class ClusterOrchestrator
     [GeneratedRegex(@"ENC\[AES256_GCM:v1:[^\]]+\]", RegexOptions.None, matchTimeoutMilliseconds: 1000)]
     private static partial Regex EncryptedSecretTokenRegex();
 
-    public string RenderTemplateAndDecryptInlineSecrets(string content, ConfigTree config)
+    public string RenderTemplateAndDecryptInlineSecrets(string content, ConfigTree config, string? canonicalPath = null)
     {
         if (string.IsNullOrEmpty(content))
         {
@@ -13708,6 +14019,19 @@ public sealed partial class ClusterOrchestrator
             {
                 if (_cryptoService.TryParseEncrypted(match.Value, out var envelope) && envelope != null)
                 {
+                    if (!string.IsNullOrEmpty(canonicalPath))
+                    {
+                        try
+                        {
+                            var bytes = _cryptoService.Decrypt(envelope, _masterKey, canonicalPath);
+                            return Encoding.UTF8.GetString(bytes);
+                        }
+                        catch (CryptographicException)
+                        {
+                            // fallback below
+                        }
+                    }
+
                     try
                     {
                         var bytes = _cryptoService.Decrypt(envelope, _masterKey, string.Empty);
@@ -13806,7 +14130,7 @@ public sealed partial class ClusterOrchestrator
                 var decrypted = DecryptSecretString(rawVal, $"services.{serviceName}.{envPropName}.{k}", $"services.{serviceName}.env.{k}");
                 if (config != null)
                 {
-                    decrypted = RenderTemplateAndDecryptInlineSecrets(decrypted, config);
+                    decrypted = RenderTemplateAndDecryptInlineSecrets(decrypted, config, $"services.{serviceName}.{envPropName}.{k}");
                 }
                 result[k] = decrypted;
             }
@@ -13840,7 +14164,7 @@ public sealed partial class ClusterOrchestrator
 
                 if (config != null)
                 {
-                    fileContent = RenderTemplateAndDecryptInlineSecrets(fileContent, config);
+                    fileContent = RenderTemplateAndDecryptInlineSecrets(fileContent, config, $"services.{serviceName}.files.{destPath}");
                 }
                 else
                 {
@@ -15596,7 +15920,7 @@ public sealed record MigrationPlan(
 
 ## File: src/Starry.Infrastructure/Orchestration/MigrationPlanner.cs
 
-**Lines**: 131 | **Size**: 5.0 KB | **Language**: csharp
+**Lines**: 142 | **Size**: 5.5 KB | **Language**: csharp
 
 ```csharp
 using System.Globalization;
@@ -15612,7 +15936,8 @@ public static class MigrationPlanner
 {
     public static MigrationPlan BuildPlan(
         ConfigTree desiredConfig,
-        IReadOnlyDictionary<string, string>? currentServiceNodePlacements = null)
+        IReadOnlyDictionary<string, string>? currentServiceNodePlacements = null,
+        bool onlyChangedServices = false)
     {
         ArgumentNullException.ThrowIfNull(desiredConfig);
 
@@ -15621,7 +15946,7 @@ public static class MigrationPlanner
 
         var nodeCount = PlanNodeActions(desiredConfig, actions);
         PlanNetworkActions(nodeCount, actions);
-        PlanServiceActions(desiredConfig, currentServiceNodePlacements, actions);
+        PlanServiceActions(desiredConfig, currentServiceNodePlacements, actions, onlyChangedServices);
 
         var sortedActions = actions
             .OrderBy(a => a.Priority)
@@ -15679,7 +16004,8 @@ public static class MigrationPlanner
     private static void PlanServiceActions(
         ConfigTree desiredConfig,
         IReadOnlyDictionary<string, string>? currentServiceNodePlacements,
-        List<PlanAction> actions)
+        List<PlanAction> actions,
+        bool onlyChangedServices = false)
     {
         if (!desiredConfig.Root.TryGetPropertyValue("services", out var servicesNode) || servicesNode is not JsonObject servicesObj)
         {
@@ -15705,6 +16031,15 @@ public static class MigrationPlanner
             var hasOldPlacement = targetNode != null &&
                                   placements.TryGetValue(svcName, out var currentNode) &&
                                   !string.Equals(currentNode, targetNode, StringComparison.OrdinalIgnoreCase);
+
+            var isAlreadyConverged = targetNode != null &&
+                                     placements.TryGetValue(svcName, out var runningNode) &&
+                                     string.Equals(runningNode, targetNode, StringComparison.OrdinalIgnoreCase);
+
+            if (onlyChangedServices && isAlreadyConverged)
+            {
+                continue;
+            }
 
             if (hasOldPlacement)
             {
@@ -17393,7 +17728,7 @@ public class NetworkAndDisruptionChaosTests
 
 ## File: tests/Starry.E2ETests/BrownfieldAdoptionE2ETests.cs
 
-**Lines**: 77 | **Size**: 2.6 KB | **Language**: csharp
+**Lines**: 90 | **Size**: 3.1 KB | **Language**: csharp
 
 ```csharp
 using System.Text.Json.Nodes;
@@ -17410,18 +17745,31 @@ namespace Starry.E2ETests;
 public class BrownfieldAdoptionE2ETests
 {
     [Fact]
-    public void AdoptionOptions_ConfiguresCorrectly()
+    public async Task Adoption_FullLifecycle_PullsFilesAndGeneratesModularConfig()
     {
-        var options = new AdoptionOptions
-        {
-            OutDir = "./test-config",
-            PullFiles = true,
-            Format = "yaml"
-        };
+        var tempDir = Path.Combine(Path.GetTempPath(), "brownfield_e2e_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
 
-        Assert.Equal("./test-config", options.OutDir);
-        Assert.True(options.PullFiles);
-        Assert.Equal("yaml", options.Format);
+        try
+        {
+            var service = new HostAdoptionService();
+            await using var node = new LocalNodeConnection("local-test");
+
+            var options = new AdoptionOptions
+            {
+                OutDir = tempDir,
+                PullFiles = true,
+                Format = "yaml"
+            };
+
+            var tree = await service.AdoptHostAsync(node, options);
+            Assert.NotNull(tree);
+            Assert.True(File.Exists(Path.Combine(tempDir, "starry.yaml")));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
     }
 
     [Fact]
@@ -17574,11 +17922,12 @@ public class ClusterEndToEndTests
 
 ## File: tests/Starry.E2ETests/ClusterMatrixFuzzerTests.cs
 
-**Lines**: 429 | **Size**: 18.1 KB | **Language**: csharp
+**Lines**: 683 | **Size**: 29.8 KB | **Language**: csharp
 
 ```csharp
 using System.Net;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json.Nodes;
 using Starry.Core.Configuration;
 using Starry.Core.Containers;
@@ -17600,25 +17949,64 @@ namespace Starry.E2ETests;
 
 public class ClusterMatrixFuzzerTests
 {
-    private sealed class SimulatedClusterNode(string name, string distro, string host, int port, string runtimeName = "docker") : INodeConnection
+    private sealed class StatefulClusterNode : INodeConnection
     {
-        public string NodeName => name;
-        public string Host => host;
-        public int Port => port;
-        public string? DistroId => distro;
-        public string RuntimeName { get; } = runtimeName;
+        public string NodeName { get; }
+        public string Host { get; }
+        public int Port { get; }
+        public string? DistroId { get; }
+        public string RuntimeName { get; }
         public Dictionary<string, byte[]> Volumes { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, string> VirtualFiles { get; } = new(StringComparer.Ordinal);
         public List<string> ExecutedCommands { get; } = [];
+        public List<JsonObject> RegisteredContainers { get; } = [];
+
+        public StatefulClusterNode(string name, string distro, string host, int port, string runtimeName = "docker")
+        {
+            NodeName = name;
+            DistroId = distro;
+            Host = host;
+            Port = port;
+            RuntimeName = runtimeName;
+
+            // Default mock file system
+            VirtualFiles["/etc/os-release"] = $"NAME=\"{distro}\"\nID={distro}\nVERSION_ID=\"24.04\"\n";
+            VirtualFiles["/etc/nginx/shop.conf"] = "server { listen 80; server_name shop.local; }\n";
+        }
 
         public Task<ProcessResult> ExecuteCommandAsync(ProcessSpec command, CancellationToken ct = default)
         {
-            ExecutedCommands.Add($"{command.Executable} {string.Join(" ", command.Arguments)}");
+            var cmdLine = $"{command.Executable} {string.Join(" ", command.Arguments)}";
+            ExecutedCommands.Add(cmdLine);
+
+            if (command.Arguments.Count > 0 && command.Arguments[0] == "-c")
+            {
+                var script = command.Arguments[1];
+                if (script.Contains("cat /etc/nginx/shop.conf", StringComparison.Ordinal) ||
+                    script.Contains("cat '/etc/nginx/shop.conf'", StringComparison.Ordinal))
+                {
+                    return Task.FromResult(new ProcessResult(0, VirtualFiles["/etc/nginx/shop.conf"], string.Empty, TimeSpan.Zero));
+                }
+
+                if (script.Contains("sha256sum", StringComparison.Ordinal))
+                {
+                    return Task.FromResult(new ProcessResult(0, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  -", string.Empty, TimeSpan.Zero));
+                }
+            }
+
+            if (command.Executable == "cat" && command.Arguments.Count > 0 && VirtualFiles.TryGetValue(command.Arguments[0], out var content))
+            {
+                return Task.FromResult(new ProcessResult(0, content, string.Empty, TimeSpan.Zero));
+            }
+
             return Task.FromResult(new ProcessResult(0, "success", string.Empty, TimeSpan.Zero));
         }
 
         public async Task<ProcessResult> ExecuteStreamingCommandAsync(ProcessSpec command, Stream? stdinStream, Stream? stdoutStream, CancellationToken ct = default)
         {
-            ExecutedCommands.Add($"{command.Executable} {string.Join(" ", command.Arguments)}");
+            var cmdLine = $"{command.Executable} {string.Join(" ", command.Arguments)}";
+            ExecutedCommands.Add(cmdLine);
+
             if (stdinStream != null)
             {
                 using var ms = new MemoryStream();
@@ -17629,7 +18017,7 @@ public class ClusterMatrixFuzzerTests
 
             if (stdoutStream != null)
             {
-                byte[] mockStream = [0x28, 0xB5, 0x2F, 0xFD, 0x00, 0x55, 0xAA];
+                byte[] mockStream = [0x28, 0xB5, 0x2F, 0xFD, 0x00, 0x55, 0xAA, 0xDE, 0xAD, 0xBE, 0xEF];
                 await stdoutStream.WriteAsync(mockStream, ct);
             }
 
@@ -17639,21 +18027,72 @@ public class ClusterMatrixFuzzerTests
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope", Justification = "HttpClient owns handler")]
         public Task<HttpClient> CreateSocketHttpClientAsync(string socketPath, CancellationToken ct = default)
         {
-            var handler = new MockDockerHttpHandler();
+            var handler = new MockStatefulDockerHttpHandler(RegisteredContainers);
             return Task.FromResult(new HttpClient(handler, disposeHandler: true));
         }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
-    private sealed class MockDockerHttpHandler : HttpMessageHandler
+    private sealed class MockStatefulDockerHttpHandler(List<JsonObject> containers) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
-            var content = "{\"Id\":\"container-1234567890\",\"State\":\"running\",\"Status\":\"Up 2 hours\",\"Names\":[\"/web\"]}";
+            var path = request.RequestUri?.PathAndQuery ?? string.Empty;
+
+            if (path.Contains("/containers/json", StringComparison.Ordinal))
+            {
+                var arr = new JsonArray();
+                foreach (var c in containers)
+                {
+                    arr.Add(JsonNode.Parse(c.ToJsonString()));
+                }
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(arr.ToJsonString(), Encoding.UTF8, "application/json")
+                });
+            }
+
+            if (path.Contains("/containers/", StringComparison.Ordinal) && path.EndsWith("/json", StringComparison.Ordinal))
+            {
+                var inspectObj = new JsonObject
+                {
+                    ["Id"] = "c1234567890",
+                    ["Name"] = "/shop-web",
+                    ["State"] = new JsonObject { ["Running"] = true, ["Status"] = "running" },
+                    ["Config"] = new JsonObject
+                    {
+                        ["Image"] = "nginx:alpine",
+                        ["Env"] = new JsonArray { "POSTGRES_PASSWORD=secret123", "PORT=80" },
+                        ["Labels"] = new JsonObject { ["com.docker.compose.project"] = "shop" }
+                    },
+                    ["HostConfig"] = new JsonObject
+                    {
+                        ["Binds"] = new JsonArray { "/etc/nginx/shop.conf:/etc/nginx/shop.conf:ro" },
+                        ["PortBindings"] = new JsonObject
+                        {
+                            ["80/tcp"] = new JsonArray { new JsonObject { ["HostPort"] = "8080" } }
+                        }
+                    }
+                };
+
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(inspectObj.ToJsonString(), Encoding.UTF8, "application/json")
+                });
+            }
+
+            if (path.Contains("/version", StringComparison.Ordinal))
+            {
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("{\"Version\":\"26.1.0\",\"Os\":\"linux\",\"Arch\":\"amd64\"}", Encoding.UTF8, "application/json")
+                });
+            }
+
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent(content, System.Text.Encoding.UTF8, "application/json")
+                Content = new StringContent("{\"Id\":\"c1234567890\"}", Encoding.UTF8, "application/json")
             });
         }
     }
@@ -17661,8 +18100,8 @@ public class ClusterMatrixFuzzerTests
     [Fact]
     public async Task Scenario01_TwoNode_HomogeneousUbuntuDocker_MeshAndMigration()
     {
-        await using var node1 = new SimulatedClusterNode("ubuntu-1", "ubuntu", "198.51.100.11", 22);
-        await using var node2 = new SimulatedClusterNode("ubuntu-2", "ubuntu", "198.51.100.12", 22);
+        await using var node1 = new StatefulClusterNode("ubuntu-1", "ubuntu", "198.51.100.11", 22);
+        await using var node2 = new StatefulClusterNode("ubuntu-2", "ubuntu", "198.51.100.12", 22);
 
         var tree = new ConfigTree();
         tree.SetNode("cluster_name", JsonValue.Create("cluster-scen-01"));
@@ -17673,13 +18112,17 @@ public class ClusterMatrixFuzzerTests
 
         var plan = MigrationPlanner.BuildPlan(tree, new Dictionary<string, string>(StringComparer.Ordinal) { ["app"] = "ubuntu-1" });
         Assert.Contains(plan.Actions, a => a.ActionType == PlanActionType.MigrateServiceBlueGreen);
+
+        var orchestrator = new ClusterOrchestrator();
+        await orchestrator.ExecutePlanAsync(plan, tree, [node1, node2]);
+        Assert.Contains(node2.ExecutedCommands, c => c.Contains("apt-get install", StringComparison.Ordinal));
     }
 
     [Fact]
     public async Task Scenario02_TwoNode_HomogeneousAlmaPodman_P2PStream()
     {
-        await using var node1 = new SimulatedClusterNode("alma-1", "almalinux", "198.51.100.21", 22, "podman");
-        await using var node2 = new SimulatedClusterNode("alma-2", "almalinux", "198.51.100.22", 22, "podman");
+        await using var node1 = new StatefulClusterNode("alma-1", "almalinux", "198.51.100.21", 22, "podman");
+        await using var node2 = new StatefulClusterNode("alma-2", "almalinux", "198.51.100.22", 22, "podman");
 
         var podman = new PodmanRuntime();
         await podman.StreamImagePeerToPeerAsync(node1, node2, "custom-app:latest");
@@ -17691,15 +18134,13 @@ public class ClusterMatrixFuzzerTests
     [Fact]
     public async Task Scenario03_TwoNode_CrossRuntimePingPong_DockerPodmanRounds()
     {
-        await using var dockerNode = new SimulatedClusterNode("docker-node", "ubuntu", "198.51.100.31", 22, "docker");
-        await using var podmanNode = new SimulatedClusterNode("podman-node", "almalinux", "198.51.100.32", 22, "podman");
+        await using var dockerNode = new StatefulClusterNode("docker-node", "ubuntu", "198.51.100.31", 22, "docker");
+        await using var podmanNode = new StatefulClusterNode("podman-node", "almalinux", "198.51.100.32", 22, "podman");
 
         var docker = new DockerRuntime();
         var podman = new PodmanRuntime();
 
-        // Round 1: Docker -> Podman
         await docker.StreamImagePeerToPeerAsync(dockerNode, podmanNode, "app:v1");
-        // Round 2: Podman -> Docker
         await podman.StreamImagePeerToPeerAsync(podmanNode, dockerNode, "app:v1");
 
         Assert.NotEmpty(dockerNode.ExecutedCommands);
@@ -17707,8 +18148,12 @@ public class ClusterMatrixFuzzerTests
     }
 
     [Fact]
-    public void Scenario04_ThreeNode_DebianNatJumpHost_PersistentKeepalive()
+    public async Task Scenario04_ThreeNode_DebianNatJumpHost_PersistentKeepalive()
     {
+        await using var pub1 = new StatefulClusterNode("deb-pub-1", "debian", "203.0.113.1", 22);
+        await using var pub2 = new StatefulClusterNode("deb-pub-2", "debian", "203.0.113.2", 22);
+        await using var nat3 = new StatefulClusterNode("deb-nat-3", "debian", "10.0.0.3", 22);
+
         var nodes = new List<WireGuardNodeConfig>
         {
             new("deb-pub-1", "10.99.0.1", "k1", "p1", 51820, "203.0.113.1", IsPublic: true),
@@ -17722,6 +18167,9 @@ public class ClusterMatrixFuzzerTests
         Assert.Contains("PersistentKeepalive = 25", natConfig, StringComparison.Ordinal);
         Assert.Contains("Endpoint = 203.0.113.1:51820", natConfig, StringComparison.Ordinal);
         Assert.Contains("Endpoint = 203.0.113.2:51820", natConfig, StringComparison.Ordinal);
+
+        await WireGuardMeshService.ApplyConfigurationAsync(nat3, natConfig);
+        Assert.Contains(nat3.ExecutedCommands, c => c.Contains("wg syncconf starry0", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -17747,9 +18195,9 @@ public class ClusterMatrixFuzzerTests
         var tomlProvider = new TomlConfigFormatProvider();
         var jsonProvider = new JsonConfigFormatProvider();
 
-        var archNode = yamlProvider.Parse(System.Text.Encoding.UTF8.GetBytes("host: 198.51.100.41\nvpn_ip: 10.99.0.1\n"), "arch.yaml");
-        var alpineNode = tomlProvider.Parse(System.Text.Encoding.UTF8.GetBytes("host = '198.51.100.42'\nvpn_ip = '10.99.0.2'\n"), "alpine.toml");
-        var almaNode = jsonProvider.Parse(System.Text.Encoding.UTF8.GetBytes("{\"host\":\"198.51.100.43\",\"vpn_ip\":\"10.99.0.3\"}"), "alma.json");
+        var archNode = yamlProvider.Parse(Encoding.UTF8.GetBytes("host: 198.51.100.41\nvpn_ip: 10.99.0.1\n"), "arch.yaml");
+        var alpineNode = tomlProvider.Parse(Encoding.UTF8.GetBytes("host = '198.51.100.42'\nvpn_ip = '10.99.0.2'\n"), "alpine.toml");
+        var almaNode = jsonProvider.Parse(Encoding.UTF8.GetBytes("{\"host\":\"198.51.100.43\",\"vpn_ip\":\"10.99.0.3\"}"), "alma.json");
 
         Assert.NotNull(archNode);
         Assert.NotNull(alpineNode);
@@ -17757,8 +18205,13 @@ public class ClusterMatrixFuzzerTests
     }
 
     [Fact]
-    public void Scenario07_FourNode_MultiTierArchitecture_PriorityScheduling()
+    public async Task Scenario07_FourNode_MultiTierArchitecture_PriorityScheduling()
     {
+        await using var n1 = new StatefulClusterNode("node-reg", "ubuntu", "198.51.100.51", 22);
+        await using var n2 = new StatefulClusterNode("node-db", "almalinux", "198.51.100.52", 22);
+        await using var n3 = new StatefulClusterNode("node-api", "debian", "198.51.100.53", 22);
+        await using var n4 = new StatefulClusterNode("node-proxy", "alpine", "198.51.100.54", 22);
+
         var services = new List<ServiceSpec>
         {
             new() { Name = "ingress-proxy", Image = "nginx:alpine", Priority = 90 },
@@ -17772,18 +18225,49 @@ public class ClusterMatrixFuzzerTests
         Assert.Equal("database-postgres", ordered[1].Name);
         Assert.Equal("api-backend", ordered[2].Name);
         Assert.Equal("ingress-proxy", ordered[3].Name);
+
+        var tree = new ConfigTree();
+        tree.SetNode("cluster_name", JsonValue.Create("tier-cluster"));
+        foreach (var s in ordered)
+        {
+            tree.SetNode($"services.{s.Name}.image", JsonValue.Create(s.Image));
+            tree.SetNode($"services.{s.Name}.priority", JsonValue.Create(s.Priority));
+        }
+
+        var plan = MigrationPlanner.BuildPlan(tree);
+        var orchestrator = new ClusterOrchestrator();
+        await orchestrator.ExecutePlanAsync(plan, tree, [n1, n2, n3, n4]);
     }
 
     [Fact]
-    public void Scenario08_FourNode_RingRelay_ImageAndVolumeChain()
+    public async Task Scenario08_FourNode_RingRelay_ImageAndVolumeChain()
     {
-        var ringOrder = new[] { "node-1", "node-2", "node-3", "node-4" };
-        Assert.Equal(4, ringOrder.Length);
+        await using var n1 = new StatefulClusterNode("node-1", "ubuntu", "198.51.100.61", 22);
+        await using var n2 = new StatefulClusterNode("node-2", "almalinux", "198.51.100.62", 22);
+        await using var n3 = new StatefulClusterNode("node-3", "debian", "198.51.100.63", 22);
+        await using var n4 = new StatefulClusterNode("node-4", "alpine", "198.51.100.64", 22);
+
+        var ring = new[] { n1, n2, n3, n4, n1 };
+        var runtime = new DockerRuntime();
+
+        for (var i = 0; i < ring.Length - 1; i++)
+        {
+            await runtime.StreamImagePeerToPeerAsync(ring[i], ring[i + 1], "relay-image:v1");
+        }
+
+        Assert.NotEmpty(n1.ExecutedCommands);
+        Assert.NotEmpty(n4.ExecutedCommands);
     }
 
     [Fact]
-    public void Scenario09_FiveNode_FullKessokuFleet_MeshAndInternalDns()
+    public async Task Scenario09_FiveNode_FullKessokuFleet_MeshAndInternalDns()
     {
+        await using var bocchi = new StatefulClusterNode("bocchi", "ubuntu", "203.0.113.1", 22);
+        await using var nijika = new StatefulClusterNode("nijika", "almalinux", "203.0.113.2", 22);
+        await using var ryo = new StatefulClusterNode("ryo", "debian", "10.0.0.3", 22);
+        await using var ikuyo = new StatefulClusterNode("ikuyo", "alpine", "10.0.0.4", 22);
+        await using var seika = new StatefulClusterNode("seika", "arch", "203.0.113.5", 22);
+
         var fleet = new List<WireGuardNodeConfig>
         {
             new("bocchi", "10.99.0.1", "kbocchi", "pbocchi", 51820, "203.0.113.1", IsPublic: true),
@@ -17795,10 +18279,15 @@ public class ClusterMatrixFuzzerTests
 
         var mesh = WireGuardMeshService.GenerateMeshConfigurations(fleet);
         Assert.Equal(5, mesh.Count);
-        foreach (var (_, conf) in mesh)
-        {
-            Assert.Contains("Address = 10.99.0.", conf, StringComparison.Ordinal);
-        }
+
+        await using var dns = new InternalDnsServer(port: 5354);
+        dns.RegisterRecord("bocchi.internal", IPAddress.Parse("10.99.0.1"));
+        dns.RegisterRecord("nijika.internal", IPAddress.Parse("10.99.0.2"));
+        dns.RegisterRecord("ryo.internal", IPAddress.Parse("10.99.0.3"));
+        dns.RegisterRecord("ikuyo.internal", IPAddress.Parse("10.99.0.4"));
+        dns.RegisterRecord("seika.internal", IPAddress.Parse("10.99.0.5"));
+
+        Assert.Equal(5, dns.Records.Count);
     }
 
     [Fact]
@@ -17837,30 +18326,101 @@ public class ClusterMatrixFuzzerTests
     }
 
     [Fact]
-    public void Scenario11_Chaos_NetworkEmulation_PacketLossAndLatency() => Assert.True(true);
-
-    [Fact]
-    public void Scenario12_Chaos_MidMigrationProcessKill_LeavesSourceContainerIntact() => Assert.True(true);
-
-    [Fact]
-    public void Scenario13_Chaos_NetworkPartitionBlackhole_DeadmanSwitchPreservesNodes() => Assert.True(true);
-
-    [Fact]
-    public void Scenario14_Chaos_PrivateRegistryDown_P2PFallback() => Assert.True(true);
-
-    [Fact]
-    public void Scenario15_Chaos_DiskPressure_StreamingBackupNoTempFiles() => Assert.True(true);
-
-    [Fact]
-    public void Scenario16_Chaos_ContainerAbruptKill_DriftDetectionAndAutoRestart()
+    public async Task Scenario11_Chaos_NetworkEmulation_PacketLossAndLatency()
     {
+        var responses = new Queue<HttpStatusCode>([HttpStatusCode.GatewayTimeout, HttpStatusCode.OK]);
+        using var handler = new MockChaosHttpMessageHandler(responses, delayMs: 25);
+        using var client = new HttpClient(handler) { BaseAddress = new Uri("https://api.cloudflare.com/client/v4/") };
+
+        var provider = new CloudflareDnsProvider("token", client);
+        var records = await provider.GetRecordsAsync("example.com");
+        Assert.NotNull(records);
+        Assert.True(handler.Calls >= 2);
+    }
+
+    [Fact]
+    public async Task Scenario12_Chaos_MidMigrationProcessKill_LeavesSourceContainerIntact()
+    {
+        await using var sourceNode = new StatefulClusterNode("src", "ubuntu", "198.51.100.1", 22);
+        await using var targetNode = new StatefulClusterNode("dst", "ubuntu", "198.51.100.2", 22);
+
+        var tree = new ConfigTree();
+        tree.SetNode("services.web.image", JsonValue.Create("nginx"));
+        tree.SetNode("services.web.node", JsonValue.Create("dst"));
+
+        var plan = MigrationPlanner.BuildPlan(tree, new Dictionary<string, string>(StringComparer.Ordinal) { ["web"] = "src" });
+        Assert.Contains(plan.Actions, a => a.ActionType == PlanActionType.MigrateServiceBlueGreen);
+    }
+
+    [Fact]
+    public async Task Scenario13_Chaos_NetworkPartitionBlackhole_DeadmanSwitchPreservesNodes()
+    {
+        await using var node = new StatefulClusterNode("isolated-node", "ubuntu", "198.51.100.99", 22);
+        var ruleset = NftablesService.GenerateRuleset([], [80, 443]);
+        await NftablesService.ApplyRulesetAsync(node, ruleset);
+        Assert.Contains(node.ExecutedCommands, c => c.Contains("nft -f", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Scenario14_Chaos_PrivateRegistryDown_P2PFallback()
+    {
+        await using var src = new StatefulClusterNode("reg-down-src", "ubuntu", "198.51.100.1", 22);
+        await using var dst = new StatefulClusterNode("reg-down-dst", "ubuntu", "198.51.100.2", 22);
+
+        var runtime = new DockerRuntime();
+        await runtime.StreamImagePeerToPeerAsync(src, dst, "internal-service:v1");
+
+        Assert.Contains(src.ExecutedCommands, c => c.Contains("docker save", StringComparison.Ordinal));
+        Assert.Contains(dst.ExecutedCommands, c => c.Contains("docker load", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Scenario15_Chaos_DiskPressure_StreamingBackupNoTempFiles()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "scen15_disk_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            var provider = new RcloneBackupStorageProvider("s3:bucket/backups");
+            await using var node = new StatefulClusterNode("low-disk-node", "ubuntu", "198.51.100.1", 22);
+            await provider.StreamBackupAsync(node, "/var/data", "backup-id");
+
+            Assert.Contains(node.ExecutedCommands, c => c.Contains("tar -C '/var/data'", StringComparison.Ordinal));
+            Assert.Empty(Directory.GetFiles(tempDir, "*.tar*"));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Scenario16_Chaos_ContainerAbruptKill_DriftDetectionAndAutoRestart()
+    {
+        var containers = new List<JsonObject>
+        {
+            new()
+            {
+                ["Id"] = "drift-c1",
+                ["Names"] = new JsonArray { "/web" },
+                ["Image"] = "nginx:alpine",
+                ["State"] = "exited",
+                ["Status"] = "Exited (137) 10 seconds ago",
+                ["Labels"] = new JsonObject { ["managed-by"] = "starry" }
+            }
+        };
+
+        var handler = new MockStatefulDockerHttpHandler(containers);
+        using var client = new HttpClient(handler, disposeHandler: true) { BaseAddress = new Uri("http://127.0.0.1/") };
+
         var report = new AgentStatusReport(
             IsStarry0Active: true,
             WireGuardDump: "peer: test",
             Peers: [],
-            Containers: [new ContainerState("c1", "web", "nginx", "exited", false, 137, DateTime.UtcNow, new Dictionary<string, string>(StringComparer.Ordinal))],
+            Containers: [new ContainerState("drift-c1", "web", "nginx", "exited", false, 137, DateTime.UtcNow, new Dictionary<string, string>(StringComparer.Ordinal))],
             RunningContainers: [],
-            RecentDriftEvents: [new DriftEvent("c1", "web", "Exited 137", DateTime.UtcNow, RestartTriggered: true, RestartSucceeded: true)],
+            RecentDriftEvents: [new DriftEvent("drift-c1", "web", "Exited 137", DateTime.UtcNow, RestartTriggered: true, RestartSucceeded: true)],
             TimestampUtc: DateTime.UtcNow);
 
         Assert.Single(report.RecentDriftEvents);
@@ -17904,15 +18464,26 @@ public class ClusterMatrixFuzzerTests
     [Fact]
     public async Task Scenario19_Brownfield_SingleUbuntuCompose_ExtractsFilesAndEncryptsSecrets()
     {
-        await using var node = new SimulatedClusterNode("dirty-ubuntu", "ubuntu", "198.51.100.80", 22);
+        await using var node = new StatefulClusterNode("dirty-ubuntu", "ubuntu", "198.51.100.80", 22);
+        node.RegisteredContainers.Add(new JsonObject
+        {
+            ["Id"] = "c-shop-web",
+            ["Names"] = new JsonArray { "/shop-web" },
+            ["Image"] = "nginx:alpine",
+            ["State"] = "running",
+            ["Status"] = "Up 2 hours",
+            ["Labels"] = new JsonObject { ["com.docker.compose.project"] = "shop" }
+        });
+
         var service = new HostAdoptionService();
         var tempDir = Path.Combine(Path.GetTempPath(), "scen19_adopt_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempDir);
 
         try
         {
-            var tree = await service.AdoptHostAsync(node, new AdoptionOptions { OutDir = tempDir });
+            var tree = await service.AdoptHostAsync(node, new AdoptionOptions { OutDir = tempDir, PullFiles = true });
             Assert.NotNull(tree);
+            Assert.True(File.Exists(Path.Combine(tempDir, "starry.yaml")) || File.Exists(Path.Combine(tempDir, "services", "shop.yaml")));
         }
         finally
         {
@@ -17923,7 +18494,7 @@ public class ClusterMatrixFuzzerTests
     [Fact]
     public async Task Scenario20_Brownfield_AlmaPodman_GeneratesTomlWithCustomMounts()
     {
-        await using var node = new SimulatedClusterNode("dirty-alma", "almalinux", "198.51.100.81", 22, "podman");
+        await using var node = new StatefulClusterNode("dirty-alma", "almalinux", "198.51.100.81", 22, "podman");
         var service = new HostAdoptionService();
         var tempDir = Path.Combine(Path.GetTempPath(), "scen20_adopt_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempDir);
@@ -17942,7 +18513,7 @@ public class ClusterMatrixFuzzerTests
     [Fact]
     public async Task Scenario21_Brownfield_DebianNatBehindBastion_GeneratesJsonConfig()
     {
-        await using var node = new SimulatedClusterNode("nat-deb", "debian", "10.200.0.30", 22);
+        await using var node = new StatefulClusterNode("nat-deb", "debian", "10.200.0.30", 22);
         var service = new HostAdoptionService();
         var tempDir = Path.Combine(Path.GetTempPath(), "scen21_adopt_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempDir);
@@ -17961,9 +18532,9 @@ public class ClusterMatrixFuzzerTests
     [Fact]
     public async Task Scenario22_Brownfield_MultiHostThreeNodes_AggregatesModularConfig()
     {
-        await using var n1 = new SimulatedClusterNode("h1", "ubuntu", "198.51.100.91", 22);
-        await using var n2 = new SimulatedClusterNode("h2", "almalinux", "198.51.100.92", 22, "podman");
-        await using var n3 = new SimulatedClusterNode("h3", "debian", "198.51.100.93", 22);
+        await using var n1 = new StatefulClusterNode("h1", "ubuntu", "198.51.100.91", 22);
+        await using var n2 = new StatefulClusterNode("h2", "almalinux", "198.51.100.92", 22, "podman");
+        await using var n3 = new StatefulClusterNode("h3", "debian", "198.51.100.93", 22);
 
         var service = new HostAdoptionService();
         var tempDir = Path.Combine(Path.GetTempPath(), "scen22_adopt_" + Guid.NewGuid().ToString("N"));
@@ -17988,7 +18559,7 @@ public class ClusterMatrixFuzzerTests
     [Fact]
     public async Task Scenario23_Brownfield_LiveNetworkAttach_ZeroRestartDowntime()
     {
-        await using var node = new SimulatedClusterNode("attach-node", "ubuntu", "198.51.100.94", 22);
+        await using var node = new StatefulClusterNode("attach-node", "ubuntu", "198.51.100.94", 22);
         var service = new HostAdoptionService();
         await service.AttachLiveContainerToMeshAsync(node, "live-container-id", "10.99.10.5");
         Assert.Contains(node.ExecutedCommands, c => c.Contains("live-container-id", StringComparison.Ordinal) || c.Contains("10.99.10.5", StringComparison.Ordinal));
@@ -17997,13 +18568,44 @@ public class ClusterMatrixFuzzerTests
     [Fact]
     public async Task Scenario24_Brownfield_CoexistencePolicy_ManagedOnlyIgnoresUnmanaged()
     {
-        await using var node = new SimulatedClusterNode("coexist-node", "ubuntu", "198.51.100.95", 22);
+        await using var node = new StatefulClusterNode("coexist-node", "ubuntu", "198.51.100.95", 22);
+        node.RegisteredContainers.Add(new JsonObject
+        {
+            ["Id"] = "unmanaged-box",
+            ["Names"] = new JsonArray { "/manual-debug-box" },
+            ["Image"] = "busybox",
+            ["State"] = "running",
+            ["Status"] = "Up",
+            ["Labels"] = new JsonObject()
+        });
+
         var service = new HostAdoptionService();
         var config = new ConfigTree();
         config.SetNode("services.known-service.image", JsonValue.Create("app:v1"));
 
         var unmanaged = await service.ListUnmanagedContainersAsync([node], config);
-        Assert.NotNull(unmanaged);
+        Assert.Single(unmanaged);
+        Assert.Equal("manual-debug-box", unmanaged[0].ContainerName);
+    }
+
+    private sealed class MockChaosHttpMessageHandler(Queue<HttpStatusCode> responses, int delayMs = 10) : HttpMessageHandler
+    {
+        public int Calls { get; private set; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Calls++;
+            if (delayMs > 0)
+            {
+                await Task.Delay(delayMs, cancellationToken);
+            }
+
+            var status = responses.Count > 0 ? responses.Dequeue() : HttpStatusCode.OK;
+            return new HttpResponseMessage(status)
+            {
+                Content = new StringContent("{\"result\":[]}", Encoding.UTF8, "application/json")
+            };
+        }
     }
 }
 ```
