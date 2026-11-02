@@ -17932,7 +17932,7 @@ public class ClusterEndToEndTests
 
 ## File: tests/Starry.E2ETests/ClusterMatrixFuzzerTests.cs
 
-**Lines**: 683 | **Size**: 29.8 KB | **Language**: csharp
+**Lines**: 683 | **Size**: 29.9 KB | **Language**: csharp
 
 ```csharp
 using System.Net;
@@ -17989,7 +17989,7 @@ public class ClusterMatrixFuzzerTests
             var cmdLine = $"{command.Executable} {string.Join(" ", command.Arguments)}";
             ExecutedCommands.Add(cmdLine);
 
-            if (command.Arguments.Count > 0 && command.Arguments[0] == "-c")
+            if (command.Arguments.Count > 0 && string.Equals(command.Arguments[0], "-c", StringComparison.Ordinal))
             {
                 var script = command.Arguments[1];
                 if (script.Contains("cat /etc/nginx/shop.conf", StringComparison.Ordinal) ||
@@ -18004,7 +18004,7 @@ public class ClusterMatrixFuzzerTests
                 }
             }
 
-            if (command.Executable == "cat" && command.Arguments.Count > 0 && VirtualFiles.TryGetValue(command.Arguments[0], out var content))
+            if (string.Equals(command.Executable, "cat", StringComparison.Ordinal) && command.Arguments.Count > 0 && VirtualFiles.TryGetValue(command.Arguments[0], out var content))
             {
                 return Task.FromResult(new ProcessResult(0, content, string.Empty, TimeSpan.Zero));
             }
@@ -18421,8 +18421,8 @@ public class ClusterMatrixFuzzerTests
             }
         };
 
-        var handler = new MockStatefulDockerHttpHandler(containers);
-        using var client = new HttpClient(handler, disposeHandler: true) { BaseAddress = new Uri("http://127.0.0.1/") };
+        using var handler = new MockStatefulDockerHttpHandler(containers);
+        using var client = new HttpClient(handler, disposeHandler: false) { BaseAddress = new Uri("http://127.0.0.1/") };
 
         var report = new AgentStatusReport(
             IsStarry0Active: true,
