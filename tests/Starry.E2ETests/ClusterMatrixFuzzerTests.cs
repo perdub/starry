@@ -113,8 +113,45 @@ public class ClusterMatrixFuzzerTests
         {
             var path = request.RequestUri?.PathAndQuery ?? string.Empty;
 
+            if (request.Method == HttpMethod.Post && path.Contains("/containers/create", StringComparison.Ordinal))
+            {
+                var query = request.RequestUri?.Query ?? string.Empty;
+                var match = System.Text.RegularExpressions.Regex.Match(query, @"name=(?<name>[^&]+)");
+                var name = match.Success ? Uri.UnescapeDataString(match.Groups["name"].Value) : "app";
+                var id = "c-" + Guid.NewGuid().ToString("N")[..12];
+
+                var newContainer = new JsonObject
+                {
+                    ["Id"] = id,
+                    ["Names"] = new JsonArray { "/" + name.TrimStart('/') },
+                    ["Image"] = "app:latest",
+                    ["State"] = "running",
+                    ["Status"] = "Up",
+                    ["Labels"] = new JsonObject { ["managed-by"] = "starry" }
+                };
+                containers.Add(newContainer);
+
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Created)
+                {
+                    Content = new StringContent($"{{\"Id\":\"{id}\"}}", Encoding.UTF8, "application/json")
+                });
+            }
+
             if (path.Contains("/containers/json", StringComparison.Ordinal))
             {
+                if (containers.Count == 0)
+                {
+                    containers.Add(new JsonObject
+                    {
+                        ["Id"] = "c-init",
+                        ["Names"] = new JsonArray { "/app", "/web" },
+                        ["Image"] = "nginx:alpine",
+                        ["State"] = "running",
+                        ["Status"] = "Up",
+                        ["Labels"] = new JsonObject { ["managed-by"] = "starry" }
+                    });
+                }
+
                 var arr = new JsonArray();
                 foreach (var c in containers)
                 {
