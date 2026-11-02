@@ -116,8 +116,19 @@ public class ClusterMatrixFuzzerTests
             if (request.Method == HttpMethod.Post && path.Contains("/containers/create", StringComparison.Ordinal))
             {
                 var query = request.RequestUri?.Query ?? string.Empty;
-                var match = System.Text.RegularExpressions.Regex.Match(query, @"name=(?<name>[^&]+)");
-                var name = match.Success ? Uri.UnescapeDataString(match.Groups["name"].Value) : "app";
+                var name = "app";
+                var qIdx = query.IndexOf("name=", StringComparison.Ordinal);
+                if (qIdx >= 0)
+                {
+                    var rawName = query[(qIdx + 5)..];
+                    var ampersand = rawName.IndexOf('&', StringComparison.Ordinal);
+                    if (ampersand >= 0)
+                    {
+                        rawName = rawName[..ampersand];
+                    }
+                    name = Uri.UnescapeDataString(rawName);
+                }
+
                 var id = "c-" + Guid.NewGuid().ToString("N")[..12];
 
                 var newContainer = new JsonObject

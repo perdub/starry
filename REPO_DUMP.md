@@ -3,8 +3,8 @@
 ## Overview
 
 - **Total Files**: 139
-- **Total Lines of Code**: 18605
-- **Total Size**: 700.2 KB
+- **Total Lines of Code**: 18616
+- **Total Size**: 700.5 KB
 - **Root Directory**: `/root/src/starry`
 
 ## Repository Structure
@@ -17932,7 +17932,7 @@ public class ClusterEndToEndTests
 
 ## File: tests/Starry.E2ETests/ClusterMatrixFuzzerTests.cs
 
-**Lines**: 720 | **Size**: 31.6 KB | **Language**: csharp
+**Lines**: 731 | **Size**: 31.9 KB | **Language**: csharp
 
 ```csharp
 using System.Net;
@@ -18053,8 +18053,19 @@ public class ClusterMatrixFuzzerTests
             if (request.Method == HttpMethod.Post && path.Contains("/containers/create", StringComparison.Ordinal))
             {
                 var query = request.RequestUri?.Query ?? string.Empty;
-                var match = System.Text.RegularExpressions.Regex.Match(query, @"name=(?<name>[^&]+)");
-                var name = match.Success ? Uri.UnescapeDataString(match.Groups["name"].Value) : "app";
+                var name = "app";
+                var qIdx = query.IndexOf("name=", StringComparison.Ordinal);
+                if (qIdx >= 0)
+                {
+                    var rawName = query[(qIdx + 5)..];
+                    var ampersand = rawName.IndexOf('&', StringComparison.Ordinal);
+                    if (ampersand >= 0)
+                    {
+                        rawName = rawName[..ampersand];
+                    }
+                    name = Uri.UnescapeDataString(rawName);
+                }
+
                 var id = "c-" + Guid.NewGuid().ToString("N")[..12];
 
                 var newContainer = new JsonObject
