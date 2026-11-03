@@ -21,7 +21,6 @@ public static class NodeNetworkInspector
 
         var interfaces = new List<NodeInterfaceInfo>();
 
-        // 1. Run ip -j addr show
         var ipResult = await node.ExecuteCommandAsync(new ProcessSpec
         {
             Executable = "ip",
@@ -29,23 +28,7 @@ public static class NodeNetworkInspector
             Timeout = TimeSpan.FromSeconds(10)
         }, ct).ConfigureAwait(false);
 
-        // 2. Query external seen IPs
-        var extIpv4Result = await node.ExecuteCommandAsync(new ProcessSpec
-        {
-            Executable = "curl",
-            Arguments = ["-4s", "--max-time", "3", "https://api.ipify.org"],
-            Timeout = TimeSpan.FromSeconds(5)
-        }, ct).ConfigureAwait(false);
-
-        var extIpv6Result = await node.ExecuteCommandAsync(new ProcessSpec
-        {
-            Executable = "curl",
-            Arguments = ["-6s", "--max-time", "3", "https://api6.ipify.org"],
-            Timeout = TimeSpan.FromSeconds(5)
-        }, ct).ConfigureAwait(false);
-
-        var extIpv4 = extIpv4Result.IsSuccess ? extIpv4Result.StandardOutput.Trim() : null;
-        var extIpv6 = extIpv6Result.IsSuccess ? extIpv6Result.StandardOutput.Trim() : null;
+        var (extIpv4, extIpv6) = await QueryExternalIpsAsync(node, ct).ConfigureAwait(false);
 
         if (ipResult.IsSuccess && !string.IsNullOrWhiteSpace(ipResult.StandardOutput))
         {
@@ -86,6 +69,28 @@ public static class NodeNetworkInspector
 
         var meshIp = IdLedgerService.FormatHostWireGuardIp(hostId);
         return new NodeNetworkReport(node.NodeName, node.Host, hostId, meshIp, interfaces);
+    }
+
+    private static async Task<(string? Ipv4, string? Ipv6)> QueryExternalIpsAsync(INodeConnection node, CancellationToken ct)
+    {
+        var extIpv4Result = await node.ExecuteCommandAsync(new ProcessSpec
+        {
+            Executable = "curl",
+            Arguments = ["-4s", "--max-time", "3", "https://api.ipify.org"],
+            Timeout = TimeSpan.FromSeconds(5)
+        }, ct).ConfigureAwait(false);
+
+        var extIpv6Result = await node.ExecuteCommandAsync(new ProcessSpec
+        {
+            Executable = "curl",
+            Arguments = ["-6s", "--max-time", "3", "https://api6.ipify.org"],
+            Timeout = TimeSpan.FromSeconds(5)
+        }, ct).ConfigureAwait(false);
+
+        var extIpv4 = extIpv4Result.IsSuccess ? extIpv4Result.StandardOutput.Trim() : null;
+        var extIpv6 = extIpv6Result.IsSuccess ? extIpv6Result.StandardOutput.Trim() : null;
+
+        return (extIpv4, extIpv6);
     }
 
     private static NodeInterfaceInfo? ParseInterfaceInfo(JsonObject ifaceObj, string? extIpv4, string? extIpv6)
