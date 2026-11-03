@@ -33,6 +33,7 @@ public class ClusterMatrixFuzzerTests
         public Dictionary<string, string> VirtualFiles { get; } = new(StringComparer.Ordinal);
         public List<string> ExecutedCommands { get; } = [];
         public List<JsonObject> RegisteredContainers { get; } = [];
+        public Func<ProcessSpec, ProcessResult?>? CommandInterceptor { get; set; }
 
         public StatefulClusterNode(string name, string distro, string host, int port, string runtimeName = "docker")
         {
@@ -51,6 +52,15 @@ public class ClusterMatrixFuzzerTests
         {
             var cmdLine = $"{command.Executable} {string.Join(" ", command.Arguments)}";
             ExecutedCommands.Add(cmdLine);
+
+            if (CommandInterceptor != null)
+            {
+                var intercepted = CommandInterceptor(command);
+                if (intercepted != null)
+                {
+                    return Task.FromResult(intercepted);
+                }
+            }
 
             if (command.Arguments.Count > 0 && string.Equals(command.Arguments[0], "-c", StringComparison.Ordinal))
             {
@@ -79,6 +89,15 @@ public class ClusterMatrixFuzzerTests
         {
             var cmdLine = $"{command.Executable} {string.Join(" ", command.Arguments)}";
             ExecutedCommands.Add(cmdLine);
+
+            if (CommandInterceptor != null)
+            {
+                var intercepted = CommandInterceptor(command);
+                if (intercepted != null)
+                {
+                    return intercepted;
+                }
+            }
 
             if (stdinStream != null)
             {
@@ -466,11 +485,35 @@ public class ClusterMatrixFuzzerTests
         await using var targetNode = new StatefulClusterNode("dst", "ubuntu", "198.51.100.2", 22);
 
         var tree = new ConfigTree();
-        tree.SetNode("services.web.image", JsonValue.Create("nginx"));
+        tree.SetNode("cluster_name", JsonValue.Create("mid-kill-cluster"));
+        tree.SetNode("nodes.src.host", JsonValue.Create("198.51.100.1"));
+        tree.SetNode("nodes.dst.host", JsonValue.Create("198.51.100.2"));
+        tree.SetNode("services.web.image", JsonValue.Create("nginx:alpine"));
         tree.SetNode("services.web.node", JsonValue.Create("dst"));
+        tree.SetNode("services.web.volumes", new JsonArray { "/var/data:/var/data" });
 
         var plan = MigrationPlanner.BuildPlan(tree, new Dictionary<string, string>(StringComparer.Ordinal) { ["web"] = "src" });
-        Assert.Contains(plan.Actions, a => a.ActionType == PlanActionType.MigrateServiceBlueGreen);
+        var orchestrator = new ClusterOrchestrator();
+
+        var failSync = true;
+        targetNode.CommandInterceptor = spec =>
+        {
+            var args = string.Join(" ", spec.Arguments);
+            if (failSync && args.Contains("tar -C '/var/data' -xf -", StringComparison.Ordinal))
+            {
+                return new ProcessResult(1, string.Empty, "tar: unexpected EOF", TimeSpan.Zero);
+            }
+            return null;
+        };
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            orchestrator.ExecutePlanAsync(plan, tree, [sourceNode, targetNode]));
+
+        Assert.DoesNotContain(sourceNode.ExecutedCommands, c => c.Contains("stop web", StringComparison.Ordinal));
+
+        failSync = false;
+        await orchestrator.ExecutePlanAsync(plan, tree, [sourceNode, targetNode]);
+        Assert.Contains(sourceNode.ExecutedCommands, c => c.Contains("stop web", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -519,40 +562,45 @@ public class ClusterMatrixFuzzerTests
     [Fact]
     public async Task Scenario16_Chaos_ContainerAbruptKill_DriftDetectionAndAutoRestart()
     {
-        var containers = new List<JsonObject>
+        await using var node = new StatefulClusterNode("drift-node", "ubuntu", "198.51.100.16", 22);
+        node.RegisteredContainers.Add(new JsonObject
         {
-            new()
-            {
-                ["Id"] = "drift-c1",
-                ["Names"] = new JsonArray { "/web" },
-                ["Image"] = "nginx:alpine",
-                ["State"] = "exited",
-                ["Status"] = "Exited (137) 10 seconds ago",
-                ["Labels"] = new JsonObject { ["managed-by"] = "starry" }
-            }
-        };
+            ["Id"] = "drift-c1",
+            ["Names"] = new JsonArray { "/web" },
+            ["Image"] = "nginx:alpine",
+            ["State"] = "exited",
+            ["Status"] = "Exited (137) 10 seconds ago",
+            ["Labels"] = new JsonObject { ["managed-by"] = "starry" }
+        });
 
-        using var handler = new MockStatefulDockerHttpHandler(containers);
-        using var client = new HttpClient(handler, disposeHandler: false) { BaseAddress = new Uri("http://127.0.0.1/") };
+        await using var daemon = new StarryAgentDaemon(new DockerRuntime(), node);
+        var restarted = await daemon.PerformHealthCheckAndReconcileAsync();
 
-        var report = new AgentStatusReport(
-            IsStarry0Active: true,
-            WireGuardDump: "peer: test",
-            Peers: [],
-            Containers: [new ContainerState("drift-c1", "web", "nginx", "exited", false, 137, DateTime.UtcNow, new Dictionary<string, string>(StringComparer.Ordinal))],
-            RunningContainers: [],
-            RecentDriftEvents: [new DriftEvent("drift-c1", "web", "Exited 137", DateTime.UtcNow, RestartTriggered: true, RestartSucceeded: true)],
-            TimestampUtc: DateTime.UtcNow);
-
-        Assert.Single(report.RecentDriftEvents);
-        Assert.True(report.RecentDriftEvents[0].RestartTriggered);
+        Assert.Equal(1, restarted);
+        Assert.Single(daemon.RecentDriftEvents);
+        Assert.True(daemon.RecentDriftEvents[0].RestartSucceeded);
     }
 
     [Fact]
-    public void Scenario17_Chaos_CorruptedFirewallRuleset_DeadmanRollbackPreservesSsh()
+    public async Task Scenario17_Chaos_CorruptedFirewallRuleset_DeadmanRollbackPreservesSsh()
     {
+        await using var node = new StatefulClusterNode("fw-node", "ubuntu", "198.51.100.17", 22);
+
+        node.CommandInterceptor = spec =>
+        {
+            var args = string.Join(" ", spec.Arguments);
+            if (args.Contains("cat > /etc/nftables.starry.conf && nft -f /etc/nftables.starry.conf", StringComparison.Ordinal))
+            {
+                return new ProcessResult(1, string.Empty, "syntax error in ruleset", TimeSpan.Zero);
+            }
+            return null;
+        };
+
         var ruleset = NftablesService.GenerateRuleset([], [80, 443]);
-        Assert.Contains("delete table inet starry", ruleset, StringComparison.Ordinal);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => NftablesService.ApplyRulesetAsync(node, ruleset));
+
+        Assert.Contains(node.ExecutedCommands, c => c.Contains("cp /etc/nftables.starry.conf /etc/nftables.starry.conf.bak", StringComparison.Ordinal));
+        Assert.Contains(node.ExecutedCommands, c => c.Contains("nft -f /etc/nftables.starry.conf.bak", StringComparison.Ordinal));
     }
 
     [Fact]

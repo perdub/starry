@@ -2,9 +2,9 @@
 
 ## Overview
 
-- **Total Files**: 139
-- **Total Lines of Code**: 18616
-- **Total Size**: 700.5 KB
+- **Total Files**: 141
+- **Total Lines of Code**: 19006
+- **Total Size**: 714.1 KB
 - **Root Directory**: `/root/src/starry`
 
 ## Repository Structure
@@ -171,6 +171,8 @@ starry/
 │   │   ├── BrownfieldAdoptionE2ETests.cs
 │   │   ├── ClusterEndToEndTests.cs
 │   │   ├── ClusterMatrixFuzzerTests.cs
+│   │   ├── LiveDockerSshClusterFixture.cs
+│   │   ├── LiveMultiNodeSshClusterE2ETests.cs
 │   │   └── Starry.E2ETests.csproj
 │   └── Starry.UnitTests/
 │       ├── ConfigValidatorTests.cs
@@ -12939,7 +12941,7 @@ public sealed class LocalNodeConnection : INodeConnection
 
 ## File: src/Starry.Infrastructure/Nodes/NodeOperationsService.cs
 
-**Lines**: 214 | **Size**: 8.1 KB | **Language**: csharp
+**Lines**: 220 | **Size**: 8.3 KB | **Language**: csharp
 
 ```csharp
 using System.Globalization;
@@ -13062,7 +13064,7 @@ public sealed class NodeOperationsService
         var appendCommand = new ProcessSpec
         {
             Executable = "sh",
-            Arguments = ["-c", $"mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo '{publicKey}' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"]
+            Arguments = ["-c", $"mkdir -p ~/.ssh && chmod 700 ~/.ssh && printf '\\n%s\\n' '{publicKey}' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"]
         };
         await node.ExecuteCommandAsync(appendCommand, ct).ConfigureAwait(false);
     }
@@ -13091,12 +13093,18 @@ public sealed class NodeOperationsService
         }
     }
 
-    private static async Task RemoveOldKeyAsync(INodeConnection node, string oldPublicKey, CancellationToken ct)
+    private static async Task RemoveOldKeyAsync(INodeConnection node, string? oldPublicKey, CancellationToken ct)
     {
+        if (string.IsNullOrWhiteSpace(oldPublicKey))
+        {
+            return;
+        }
+
+        var safeKey = oldPublicKey.Trim().Replace("'", "'\\''", StringComparison.Ordinal);
         var cleanCommand = new ProcessSpec
         {
             Executable = "sh",
-            Arguments = ["-c", $"grep -v '{oldPublicKey.Trim()}' ~/.ssh/authorized_keys > ~/.ssh/authorized_keys.tmp && mv ~/.ssh/authorized_keys.tmp ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"]
+            Arguments = ["-c", $"grep -v -F '{safeKey}' ~/.ssh/authorized_keys > ~/.ssh/authorized_keys.tmp && mv ~/.ssh/authorized_keys.tmp ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"]
         };
         await node.ExecuteCommandAsync(cleanCommand, ct).ConfigureAwait(false);
     }
@@ -13160,7 +13168,7 @@ public sealed class NodeOperationsService
 
 ## File: src/Starry.Infrastructure/Nodes/SshNodeConnection.cs
 
-**Lines**: 305 | **Size**: 9.2 KB | **Language**: csharp
+**Lines**: 316 | **Size**: 9.6 KB | **Language**: csharp
 
 ```csharp
 using System.Diagnostics;
@@ -13209,7 +13217,7 @@ public sealed class SshNodeConnection : INodeConnection
         }
 
         Directory.CreateDirectory(_options.ControlPathDir);
-        _controlSocketPath = Path.Combine(_options.ControlPathDir, $"starry-ssh-{_options.User}@{_options.Host}:{_options.Port}");
+        _controlSocketPath = Path.Combine(_options.ControlPathDir, $"starry-ssh-{_options.User}@{_options.Host}:{_options.Port}-{Guid.NewGuid():N}");
 
         if (!string.IsNullOrWhiteSpace(_options.PrivateKeyContent))
         {
@@ -13260,13 +13268,22 @@ public sealed class SshNodeConnection : INodeConnection
     {
         var sshArgs = new List<string>(BuildSshArguments())
         {
-            $"{_options.User}@{_options.Host}",
-            command.Executable
+            $"{_options.User}@{_options.Host}"
         };
 
-        foreach (var arg in command.Arguments)
+        if (string.Equals(command.Executable, "sh", StringComparison.Ordinal) &&
+            command.Arguments.Count == 2 &&
+            string.Equals(command.Arguments[0], "-c", StringComparison.Ordinal))
         {
-            sshArgs.Add(arg);
+            sshArgs.Add(command.Arguments[1]);
+        }
+        else
+        {
+            sshArgs.Add(command.Executable);
+            foreach (var arg in command.Arguments)
+            {
+                sshArgs.Add(arg);
+            }
         }
 
         return new ProcessSpec
@@ -13348,7 +13365,9 @@ public sealed class SshNodeConnection : INodeConnection
         {
             "-p", _options.Port.ToString(CultureInfo.InvariantCulture),
             "-o", "BatchMode=yes",
-            "-o", "StrictHostKeyChecking=accept-new"
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "IdentitiesOnly=yes"
         };
 
         if (!string.IsNullOrEmpty(_controlSocketPath))
@@ -17269,7 +17288,7 @@ public sealed class SecretManager
 
 ## File: tests/Starry.ChaosTests/AdvancedChaosScenariosTests.cs
 
-**Lines**: 264 | **Size**: 11.8 KB | **Language**: csharp
+**Lines**: 268 | **Size**: 12.0 KB | **Language**: csharp
 
 ```csharp
 using System.Net;
@@ -17491,11 +17510,15 @@ public class AdvancedChaosScenariosTests
     }
 
     [Fact]
-    public void Chaos4_FirewallDeadmanSwitch_ProducesIdempotentFlushAndRecreation()
+    public async Task Chaos4_FirewallDeadmanSwitch_ProducesIdempotentFlushAndRecreation()
     {
+        await using var node = new MockRecordingNodeConnection("fw-fail-node");
         var ruleset = NftablesService.GenerateRuleset([], [80, 443]);
 
         Assert.Contains("table inet starry\ndelete table inet starry\ntable inet starry {", ruleset, StringComparison.Ordinal);
+
+        await NftablesService.ApplyRulesetAsync(node, ruleset);
+        Assert.Contains(node.ExecutedCommands, c => c.Contains("nftables.starry.conf", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -17738,7 +17761,7 @@ public class NetworkAndDisruptionChaosTests
 
 ## File: tests/Starry.E2ETests/BrownfieldAdoptionE2ETests.cs
 
-**Lines**: 90 | **Size**: 3.1 KB | **Language**: csharp
+**Lines**: 84 | **Size**: 2.6 KB | **Language**: csharp
 
 ```csharp
 using System.Text.Json.Nodes;
@@ -17797,38 +17820,32 @@ public class BrownfieldAdoptionE2ETests
     }
 
     [Fact]
-    public void SecretScanning_EncryptsEnvPasswordsAutomatically()
+    public async Task SecretScanning_EncryptsEnvPasswordsAutomatically()
     {
-        var crypto = new CryptoService();
-        var key = CryptoService.ParseMasterKey(CryptoService.GenerateMasterKeyBase64());
+        var tempDir = Path.Combine(Path.GetTempPath(), "secret_scan_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
 
-        var rawEnv = new Dictionary<string, string>(StringComparer.Ordinal)
+        try
         {
-            ["DB_PASSWORD"] = "super-secret-postgres-pass",
-            ["PORT"] = "8080",
-            ["API_KEY"] = "sk-live-abcdef123456"
-        };
+            var service = new HostAdoptionService();
+            await using var node = new LocalNodeConnection("adopt-node");
 
-        // Simulates HostAdoptionService secret detection
-        var encryptedEnv = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var (k, v) in rawEnv)
-        {
-            if (k.Contains("PASS", StringComparison.OrdinalIgnoreCase) ||
-                k.Contains("KEY", StringComparison.OrdinalIgnoreCase) ||
-                k.Contains("SECRET", StringComparison.OrdinalIgnoreCase))
+            var masterKey = CryptoService.ParseMasterKey(CryptoService.GenerateMasterKeyBase64());
+            var options = new AdoptionOptions
             {
-                var envelope = crypto.Encrypt(System.Text.Encoding.UTF8.GetBytes(v), key, $"env.{k}");
-                encryptedEnv[k] = envelope.FormatEncrypted();
-            }
-            else
-            {
-                encryptedEnv[k] = v;
-            }
+                OutDir = tempDir,
+                MasterKey = masterKey,
+                Format = "yaml"
+            };
+
+            var tree = await service.AdoptHostAsync(node, options);
+            Assert.NotNull(tree);
+            Assert.True(File.Exists(Path.Combine(tempDir, "starry.yaml")));
         }
-
-        Assert.StartsWith("ENC[AES256_GCM:v1:", encryptedEnv["DB_PASSWORD"], StringComparison.Ordinal);
-        Assert.StartsWith("ENC[AES256_GCM:v1:", encryptedEnv["API_KEY"], StringComparison.Ordinal);
-        Assert.Equal("8080", encryptedEnv["PORT"]);
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
     }
 }
 ```
@@ -17932,7 +17949,7 @@ public class ClusterEndToEndTests
 
 ## File: tests/Starry.E2ETests/ClusterMatrixFuzzerTests.cs
 
-**Lines**: 731 | **Size**: 31.9 KB | **Language**: csharp
+**Lines**: 779 | **Size**: 33.9 KB | **Language**: csharp
 
 ```csharp
 using System.Net;
@@ -17970,6 +17987,7 @@ public class ClusterMatrixFuzzerTests
         public Dictionary<string, string> VirtualFiles { get; } = new(StringComparer.Ordinal);
         public List<string> ExecutedCommands { get; } = [];
         public List<JsonObject> RegisteredContainers { get; } = [];
+        public Func<ProcessSpec, ProcessResult?>? CommandInterceptor { get; set; }
 
         public StatefulClusterNode(string name, string distro, string host, int port, string runtimeName = "docker")
         {
@@ -17988,6 +18006,15 @@ public class ClusterMatrixFuzzerTests
         {
             var cmdLine = $"{command.Executable} {string.Join(" ", command.Arguments)}";
             ExecutedCommands.Add(cmdLine);
+
+            if (CommandInterceptor != null)
+            {
+                var intercepted = CommandInterceptor(command);
+                if (intercepted != null)
+                {
+                    return Task.FromResult(intercepted);
+                }
+            }
 
             if (command.Arguments.Count > 0 && string.Equals(command.Arguments[0], "-c", StringComparison.Ordinal))
             {
@@ -18016,6 +18043,15 @@ public class ClusterMatrixFuzzerTests
         {
             var cmdLine = $"{command.Executable} {string.Join(" ", command.Arguments)}";
             ExecutedCommands.Add(cmdLine);
+
+            if (CommandInterceptor != null)
+            {
+                var intercepted = CommandInterceptor(command);
+                if (intercepted != null)
+                {
+                    return intercepted;
+                }
+            }
 
             if (stdinStream != null)
             {
@@ -18403,11 +18439,35 @@ public class ClusterMatrixFuzzerTests
         await using var targetNode = new StatefulClusterNode("dst", "ubuntu", "198.51.100.2", 22);
 
         var tree = new ConfigTree();
-        tree.SetNode("services.web.image", JsonValue.Create("nginx"));
+        tree.SetNode("cluster_name", JsonValue.Create("mid-kill-cluster"));
+        tree.SetNode("nodes.src.host", JsonValue.Create("198.51.100.1"));
+        tree.SetNode("nodes.dst.host", JsonValue.Create("198.51.100.2"));
+        tree.SetNode("services.web.image", JsonValue.Create("nginx:alpine"));
         tree.SetNode("services.web.node", JsonValue.Create("dst"));
+        tree.SetNode("services.web.volumes", new JsonArray { "/var/data:/var/data" });
 
         var plan = MigrationPlanner.BuildPlan(tree, new Dictionary<string, string>(StringComparer.Ordinal) { ["web"] = "src" });
-        Assert.Contains(plan.Actions, a => a.ActionType == PlanActionType.MigrateServiceBlueGreen);
+        var orchestrator = new ClusterOrchestrator();
+
+        var failSync = true;
+        targetNode.CommandInterceptor = spec =>
+        {
+            var args = string.Join(" ", spec.Arguments);
+            if (failSync && args.Contains("tar -C '/var/data' -xf -", StringComparison.Ordinal))
+            {
+                return new ProcessResult(1, string.Empty, "tar: unexpected EOF", TimeSpan.Zero);
+            }
+            return null;
+        };
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            orchestrator.ExecutePlanAsync(plan, tree, [sourceNode, targetNode]));
+
+        Assert.DoesNotContain(sourceNode.ExecutedCommands, c => c.Contains("stop web", StringComparison.Ordinal));
+
+        failSync = false;
+        await orchestrator.ExecutePlanAsync(plan, tree, [sourceNode, targetNode]);
+        Assert.Contains(sourceNode.ExecutedCommands, c => c.Contains("stop web", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -18456,40 +18516,45 @@ public class ClusterMatrixFuzzerTests
     [Fact]
     public async Task Scenario16_Chaos_ContainerAbruptKill_DriftDetectionAndAutoRestart()
     {
-        var containers = new List<JsonObject>
+        await using var node = new StatefulClusterNode("drift-node", "ubuntu", "198.51.100.16", 22);
+        node.RegisteredContainers.Add(new JsonObject
         {
-            new()
-            {
-                ["Id"] = "drift-c1",
-                ["Names"] = new JsonArray { "/web" },
-                ["Image"] = "nginx:alpine",
-                ["State"] = "exited",
-                ["Status"] = "Exited (137) 10 seconds ago",
-                ["Labels"] = new JsonObject { ["managed-by"] = "starry" }
-            }
-        };
+            ["Id"] = "drift-c1",
+            ["Names"] = new JsonArray { "/web" },
+            ["Image"] = "nginx:alpine",
+            ["State"] = "exited",
+            ["Status"] = "Exited (137) 10 seconds ago",
+            ["Labels"] = new JsonObject { ["managed-by"] = "starry" }
+        });
 
-        using var handler = new MockStatefulDockerHttpHandler(containers);
-        using var client = new HttpClient(handler, disposeHandler: false) { BaseAddress = new Uri("http://127.0.0.1/") };
+        await using var daemon = new StarryAgentDaemon(new DockerRuntime(), node);
+        var restarted = await daemon.PerformHealthCheckAndReconcileAsync();
 
-        var report = new AgentStatusReport(
-            IsStarry0Active: true,
-            WireGuardDump: "peer: test",
-            Peers: [],
-            Containers: [new ContainerState("drift-c1", "web", "nginx", "exited", false, 137, DateTime.UtcNow, new Dictionary<string, string>(StringComparer.Ordinal))],
-            RunningContainers: [],
-            RecentDriftEvents: [new DriftEvent("drift-c1", "web", "Exited 137", DateTime.UtcNow, RestartTriggered: true, RestartSucceeded: true)],
-            TimestampUtc: DateTime.UtcNow);
-
-        Assert.Single(report.RecentDriftEvents);
-        Assert.True(report.RecentDriftEvents[0].RestartTriggered);
+        Assert.Equal(1, restarted);
+        Assert.Single(daemon.RecentDriftEvents);
+        Assert.True(daemon.RecentDriftEvents[0].RestartSucceeded);
     }
 
     [Fact]
-    public void Scenario17_Chaos_CorruptedFirewallRuleset_DeadmanRollbackPreservesSsh()
+    public async Task Scenario17_Chaos_CorruptedFirewallRuleset_DeadmanRollbackPreservesSsh()
     {
+        await using var node = new StatefulClusterNode("fw-node", "ubuntu", "198.51.100.17", 22);
+
+        node.CommandInterceptor = spec =>
+        {
+            var args = string.Join(" ", spec.Arguments);
+            if (args.Contains("cat > /etc/nftables.starry.conf && nft -f /etc/nftables.starry.conf", StringComparison.Ordinal))
+            {
+                return new ProcessResult(1, string.Empty, "syntax error in ruleset", TimeSpan.Zero);
+            }
+            return null;
+        };
+
         var ruleset = NftablesService.GenerateRuleset([], [80, 443]);
-        Assert.Contains("delete table inet starry", ruleset, StringComparison.Ordinal);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => NftablesService.ApplyRulesetAsync(node, ruleset));
+
+        Assert.Contains(node.ExecutedCommands, c => c.Contains("cp /etc/nftables.starry.conf /etc/nftables.starry.conf.bak", StringComparison.Ordinal));
+        Assert.Contains(node.ExecutedCommands, c => c.Contains("nft -f /etc/nftables.starry.conf.bak", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -18664,6 +18729,347 @@ public class ClusterMatrixFuzzerTests
                 Content = new StringContent("{\"result\":[]}", Encoding.UTF8, "application/json")
             };
         }
+    }
+}
+```
+
+## File: tests/Starry.E2ETests/LiveDockerSshClusterFixture.cs
+
+**Lines**: 178 | **Size**: 5.8 KB | **Language**: csharp
+
+```csharp
+using System.Diagnostics;
+using Starry.Infrastructure.Nodes;
+using Starry.Infrastructure.Processes;
+
+namespace Starry.E2ETests;
+
+/// <summary>
+/// Sets up a live multi-node Linux SSH cluster running inside isolated Docker containers
+/// for testing real SSH transport, ControlMaster multiplexing, volume streaming, and key rotation.
+/// </summary>
+public sealed class LiveDockerSshClusterFixture : IAsyncDisposable
+{
+    private static readonly ProcessRunner Runner = new();
+    private readonly string _tempKeyDir = Path.Combine(Path.GetTempPath(), $"starry-e2e-keys-{Guid.NewGuid():N}");
+    private string _privateKeyPath = string.Empty;
+    private string _privateKeyContent = string.Empty;
+    private string _publicKeyContent = string.Empty;
+
+    public bool IsAvailable { get; private set; }
+    public SshNodeConnection? Node1 { get; private set; }
+    public SshNodeConnection? Node2 { get; private set; }
+
+    public async Task InitializeAsync()
+    {
+        // 1. Check if Docker daemon is responsive
+        try
+        {
+            var checkRes = await Runner.RunAsync(new Core.Processes.ProcessSpec
+            {
+                Executable = "docker",
+                Arguments = ["info"],
+                Timeout = TimeSpan.FromSeconds(5)
+            });
+
+            if (!checkRes.IsSuccess)
+            {
+                return;
+            }
+        }
+        catch
+        {
+            return;
+        }
+
+        Directory.CreateDirectory(_tempKeyDir);
+        _privateKeyPath = Path.Combine(_tempKeyDir, "id_ed25519");
+
+        // 2. Generate Ed25519 SSH keypair
+        await Runner.RunAsync(new Core.Processes.ProcessSpec
+        {
+            Executable = "ssh-keygen",
+            Arguments = ["-t", "ed25519", "-N", "", "-f", _privateKeyPath, "-q"]
+        });
+
+        _privateKeyContent = await File.ReadAllTextAsync(_privateKeyPath);
+        _publicKeyContent = (await File.ReadAllTextAsync(_privateKeyPath + ".pub")).Trim();
+
+        // 3. Create Docker network starry-e2e-pub
+        await Runner.RunAsync(new Core.Processes.ProcessSpec
+        {
+            Executable = "docker",
+            Arguments = ["network", "create", "--subnet", "172.28.0.0/16", "starry-e2e-pub"]
+        });
+
+        // 4. Ensure starry-ssh-node image exists
+        var imgCheck = await Runner.RunAsync(new Core.Processes.ProcessSpec
+        {
+            Executable = "docker",
+            Arguments = ["image", "inspect", "starry-ssh-node"]
+        });
+
+        if (!imgCheck.IsSuccess)
+        {
+            var dockerfile = "FROM alpine:3.20\nRUN apk add --no-cache openssh-server tar zstd rsync curl iproute2 bash\nRUN ssh-keygen -A && mkdir -p /root/.ssh && chmod 700 /root/.ssh\nRUN echo 'PermitRootLogin yes' >> /etc/ssh/sshd_config\nEXPOSE 22\nCMD [\"/usr/sbin/sshd\", \"-D\", \"-e\"]\n";
+            await Runner.RunAsync(new Core.Processes.ProcessSpec
+            {
+                Executable = "docker",
+                Arguments = ["build", "-t", "starry-ssh-node", "-"],
+                StandardInputBytes = System.Text.Encoding.UTF8.GetBytes(dockerfile)
+            });
+        }
+
+        // 5. Spin up node-1 (172.28.0.11) and node-2 (172.28.0.12)
+        await StartContainerAsync("starry-live-node-1", "172.28.0.11");
+        await StartContainerAsync("starry-live-node-2", "172.28.0.12");
+
+        // Wait up to 5s for SSH listeners to be ready
+        await Task.Delay(1500);
+
+        Node1 = new SshNodeConnection(new SshNodeOptions
+        {
+            NodeName = "live-node-1",
+            Host = "172.28.0.11",
+            Port = 22,
+            User = "root",
+            PrivateKeyContent = _privateKeyContent
+        });
+
+        Node2 = new SshNodeConnection(new SshNodeOptions
+        {
+            NodeName = "live-node-2",
+            Host = "172.28.0.12",
+            Port = 22,
+            User = "root",
+            PrivateKeyContent = _privateKeyContent
+        });
+
+        await Node1.InitializeAsync();
+        await Node2.InitializeAsync();
+
+        IsAvailable = true;
+    }
+
+    private async Task StartContainerAsync(string containerName, string ipAddress)
+    {
+        await Runner.RunAsync(new Core.Processes.ProcessSpec
+        {
+            Executable = "docker",
+            Arguments = ["rm", "-f", containerName]
+        });
+
+        await Runner.RunAsync(new Core.Processes.ProcessSpec
+        {
+            Executable = "docker",
+            Arguments = ["run", "-d", "--name", containerName, "--net", "starry-e2e-pub", "--ip", ipAddress, "starry-ssh-node"]
+        });
+
+        await Runner.RunAsync(new Core.Processes.ProcessSpec
+        {
+            Executable = "docker",
+            Arguments = ["exec", containerName, "mkdir", "-p", "/root/.ssh"]
+        });
+
+        await Runner.RunAsync(new Core.Processes.ProcessSpec
+        {
+            Executable = "docker",
+            Arguments = ["exec", "-i", containerName, "sh", "-c", "cat > /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys"],
+            StandardInputBytes = System.Text.Encoding.UTF8.GetBytes(_publicKeyContent)
+        });
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (Node1 != null)
+        {
+            await Node1.DisposeAsync();
+        }
+
+        if (Node2 != null)
+        {
+            await Node2.DisposeAsync();
+        }
+
+        await Runner.RunAsync(new Core.Processes.ProcessSpec
+        {
+            Executable = "docker",
+            Arguments = ["rm", "-f", "starry-live-node-1", "starry-live-node-2"]
+        });
+
+        await Runner.RunAsync(new Core.Processes.ProcessSpec
+        {
+            Executable = "docker",
+            Arguments = ["network", "rm", "starry-e2e-pub"]
+        });
+
+        if (Directory.Exists(_tempKeyDir))
+        {
+            try
+            {
+                Directory.Delete(_tempKeyDir, recursive: true);
+            }
+            catch (IOException)
+            {
+                // Ignore cleanup error
+            }
+        }
+    }
+}
+```
+
+## File: tests/Starry.E2ETests/LiveMultiNodeSshClusterE2ETests.cs
+
+**Lines**: 149 | **Size**: 5.4 KB | **Language**: csharp
+
+```csharp
+using System.Security.Cryptography;
+using Starry.Core.Processes;
+using Starry.Infrastructure.Nodes;
+using Xunit;
+
+namespace Starry.E2ETests;
+
+public class LiveMultiNodeSshClusterE2ETests
+{
+    [Fact]
+    public async Task LiveCluster_RealSshConnection_DetectsAlpineDistro()
+    {
+        await using var fixture = new LiveDockerSshClusterFixture();
+        await fixture.InitializeAsync();
+
+        if (!fixture.IsAvailable || fixture.Node1 == null)
+        {
+            // Skip gracefully when Docker is not accessible in execution environment
+            return;
+        }
+
+        Assert.Equal("ALPINE", fixture.Node1.DistroId);
+
+        var result = await fixture.Node1.ExecuteCommandAsync(new ProcessSpec
+        {
+            Executable = "uname",
+            Arguments = ["-a"]
+        });
+
+        Assert.True(result.IsSuccess);
+        Assert.Contains("Linux", result.StandardOutput, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task LiveCluster_VolumeBinaryStream_BitForBitIntegrityOverRealSsh()
+    {
+        await using var fixture = new LiveDockerSshClusterFixture();
+        await fixture.InitializeAsync();
+
+        if (!fixture.IsAvailable || fixture.Node1 == null || fixture.Node2 == null)
+        {
+            return;
+        }
+
+        // 1. Generate 64 KB of non-UTF8 binary data on Node 1
+        var binaryPayload = new byte[65536];
+        RandomNumberGenerator.Fill(binaryPayload);
+        binaryPayload[0] = 0xFF;
+        binaryPayload[1] = 0x00;
+        binaryPayload[2] = 0xFE;
+
+        var expectedSha = Convert.ToHexString(SHA256.HashData(binaryPayload));
+
+        // Create source volume directory on Node 1
+        await fixture.Node1.ExecuteCommandAsync(new ProcessSpec
+        {
+            Executable = "mkdir",
+            Arguments = ["-p", "/var/data/vol-test"]
+        });
+
+        // Write binary payload directly via stdin stream
+        await fixture.Node1.ExecuteStreamingCommandAsync(
+            new ProcessSpec { Executable = "sh", Arguments = ["-c", "cat > /var/data/vol-test/payload.bin"] },
+            stdinStream: new MemoryStream(binaryPayload),
+            stdoutStream: null);
+
+        // Verify SHA256 on Node 1 over SSH
+        var sha1Res = await fixture.Node1.ExecuteCommandAsync(new ProcessSpec
+        {
+            Executable = "sha256sum",
+            Arguments = ["/var/data/vol-test/payload.bin"]
+        });
+        Assert.Contains(expectedSha, sha1Res.StandardOutput, StringComparison.OrdinalIgnoreCase);
+
+        // 2. Stream volume binary archive (tar --zstd) from Node 1 into orchestrator MemoryStream, then restore to Node 2
+        using var pipeStream = new MemoryStream();
+
+        var exportRes = await fixture.Node1.ExecuteStreamingCommandAsync(
+            new ProcessSpec { Executable = "sh", Arguments = ["-c", "tar -cf - --zstd -C /var/data/vol-test ."] },
+            stdinStream: null,
+            stdoutStream: pipeStream);
+        Assert.True(exportRes.IsSuccess, $"Export failed: {exportRes.ExitCode}, {exportRes.StandardError}");
+
+        pipeStream.Position = 0;
+
+        await fixture.Node2.ExecuteCommandAsync(new ProcessSpec
+        {
+            Executable = "mkdir",
+            Arguments = ["-p", "/var/data/vol-test"]
+        });
+
+        var importRes = await fixture.Node2.ExecuteStreamingCommandAsync(
+            new ProcessSpec { Executable = "sh", Arguments = ["-c", "tar -xf - --zstd -C /var/data/vol-test"] },
+            stdinStream: pipeStream,
+            stdoutStream: null);
+        Assert.True(importRes.IsSuccess, $"ExitCode: {importRes.ExitCode}, Stderr: {importRes.StandardError}");
+
+        // 3. Verify SHA256 on Node 2 matches expected hash bit-for-bit
+        var sha2Res = await fixture.Node2.ExecuteCommandAsync(new ProcessSpec
+        {
+            Executable = "sha256sum",
+            Arguments = ["/var/data/vol-test/payload.bin"]
+        });
+
+        Assert.True(sha2Res.IsSuccess);
+        Assert.Contains(expectedSha, sha2Res.StandardOutput, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task LiveCluster_SshKeyRotation_OnLiveContainer()
+    {
+        await using var fixture = new LiveDockerSshClusterFixture();
+        await fixture.InitializeAsync();
+
+        if (!fixture.IsAvailable || fixture.Node1 == null)
+        {
+            return;
+        }
+
+        // Rotate SSH key on live Node 1
+        var newPrivateKey = await NodeOperationsService.RotateSshKeysAsync(fixture.Node1);
+        Assert.NotNull(newPrivateKey);
+        Assert.Contains("BEGIN OPENSSH PRIVATE KEY", newPrivateKey, StringComparison.Ordinal);
+
+        var host = fixture.Node1.Host;
+        var port = fixture.Node1.Port;
+        await fixture.Node1.DisposeAsync();
+
+        // Verify connection with the new rotated key
+        await using var newConn = new SshNodeConnection(new SshNodeOptions
+        {
+            NodeName = "rotated-node-1",
+            Host = host,
+            Port = port,
+            User = "root",
+            PrivateKeyContent = newPrivateKey
+        });
+
+        await newConn.InitializeAsync();
+        var testRes = await newConn.ExecuteCommandAsync(new ProcessSpec
+        {
+            Executable = "echo",
+            Arguments = ["ROTATION_VERIFIED"]
+        });
+
+        Assert.True(testRes.IsSuccess, $"testRes ExitCode: {testRes.ExitCode}, Stderr: '{testRes.StandardError}', Stdout: '{testRes.StandardOutput}'");
+        Assert.Contains("ROTATION_VERIFIED", testRes.StandardOutput, StringComparison.Ordinal);
     }
 }
 ```

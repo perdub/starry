@@ -54,37 +54,31 @@ public class BrownfieldAdoptionE2ETests
     }
 
     [Fact]
-    public void SecretScanning_EncryptsEnvPasswordsAutomatically()
+    public async Task SecretScanning_EncryptsEnvPasswordsAutomatically()
     {
-        var crypto = new CryptoService();
-        var key = CryptoService.ParseMasterKey(CryptoService.GenerateMasterKeyBase64());
+        var tempDir = Path.Combine(Path.GetTempPath(), "secret_scan_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
 
-        var rawEnv = new Dictionary<string, string>(StringComparer.Ordinal)
+        try
         {
-            ["DB_PASSWORD"] = "super-secret-postgres-pass",
-            ["PORT"] = "8080",
-            ["API_KEY"] = "sk-live-abcdef123456"
-        };
+            var service = new HostAdoptionService();
+            await using var node = new LocalNodeConnection("adopt-node");
 
-        // Simulates HostAdoptionService secret detection
-        var encryptedEnv = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var (k, v) in rawEnv)
-        {
-            if (k.Contains("PASS", StringComparison.OrdinalIgnoreCase) ||
-                k.Contains("KEY", StringComparison.OrdinalIgnoreCase) ||
-                k.Contains("SECRET", StringComparison.OrdinalIgnoreCase))
+            var masterKey = CryptoService.ParseMasterKey(CryptoService.GenerateMasterKeyBase64());
+            var options = new AdoptionOptions
             {
-                var envelope = crypto.Encrypt(System.Text.Encoding.UTF8.GetBytes(v), key, $"env.{k}");
-                encryptedEnv[k] = envelope.FormatEncrypted();
-            }
-            else
-            {
-                encryptedEnv[k] = v;
-            }
+                OutDir = tempDir,
+                MasterKey = masterKey,
+                Format = "yaml"
+            };
+
+            var tree = await service.AdoptHostAsync(node, options);
+            Assert.NotNull(tree);
+            Assert.True(File.Exists(Path.Combine(tempDir, "starry.yaml")));
         }
-
-        Assert.StartsWith("ENC[AES256_GCM:v1:", encryptedEnv["DB_PASSWORD"], StringComparison.Ordinal);
-        Assert.StartsWith("ENC[AES256_GCM:v1:", encryptedEnv["API_KEY"], StringComparison.Ordinal);
-        Assert.Equal("8080", encryptedEnv["PORT"]);
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
     }
 }

@@ -217,11 +217,15 @@ public class AdvancedChaosScenariosTests
     }
 
     [Fact]
-    public void Chaos4_FirewallDeadmanSwitch_ProducesIdempotentFlushAndRecreation()
+    public async Task Chaos4_FirewallDeadmanSwitch_ProducesIdempotentFlushAndRecreation()
     {
+        await using var node = new MockRecordingNodeConnection("fw-fail-node");
         var ruleset = NftablesService.GenerateRuleset([], [80, 443]);
 
         Assert.Contains("table inet starry\ndelete table inet starry\ntable inet starry {", ruleset, StringComparison.Ordinal);
+
+        await NftablesService.ApplyRulesetAsync(node, ruleset);
+        Assert.Contains(node.ExecutedCommands, c => c.Contains("nftables.starry.conf", StringComparison.Ordinal));
     }
 
     [Fact]

@@ -118,7 +118,7 @@ public sealed class NodeOperationsService
         var appendCommand = new ProcessSpec
         {
             Executable = "sh",
-            Arguments = ["-c", $"mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo '{publicKey}' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"]
+            Arguments = ["-c", $"mkdir -p ~/.ssh && chmod 700 ~/.ssh && printf '\\n%s\\n' '{publicKey}' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"]
         };
         await node.ExecuteCommandAsync(appendCommand, ct).ConfigureAwait(false);
     }
@@ -147,12 +147,18 @@ public sealed class NodeOperationsService
         }
     }
 
-    private static async Task RemoveOldKeyAsync(INodeConnection node, string oldPublicKey, CancellationToken ct)
+    private static async Task RemoveOldKeyAsync(INodeConnection node, string? oldPublicKey, CancellationToken ct)
     {
+        if (string.IsNullOrWhiteSpace(oldPublicKey))
+        {
+            return;
+        }
+
+        var safeKey = oldPublicKey.Trim().Replace("'", "'\\''", StringComparison.Ordinal);
         var cleanCommand = new ProcessSpec
         {
             Executable = "sh",
-            Arguments = ["-c", $"grep -v '{oldPublicKey.Trim()}' ~/.ssh/authorized_keys > ~/.ssh/authorized_keys.tmp && mv ~/.ssh/authorized_keys.tmp ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"]
+            Arguments = ["-c", $"grep -v -F '{safeKey}' ~/.ssh/authorized_keys > ~/.ssh/authorized_keys.tmp && mv ~/.ssh/authorized_keys.tmp ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"]
         };
         await node.ExecuteCommandAsync(cleanCommand, ct).ConfigureAwait(false);
     }

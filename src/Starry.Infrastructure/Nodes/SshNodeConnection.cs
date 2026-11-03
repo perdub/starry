@@ -44,7 +44,7 @@ public sealed class SshNodeConnection : INodeConnection
         }
 
         Directory.CreateDirectory(_options.ControlPathDir);
-        _controlSocketPath = Path.Combine(_options.ControlPathDir, $"starry-ssh-{_options.User}@{_options.Host}:{_options.Port}");
+        _controlSocketPath = Path.Combine(_options.ControlPathDir, $"starry-ssh-{_options.User}@{_options.Host}:{_options.Port}-{Guid.NewGuid():N}");
 
         if (!string.IsNullOrWhiteSpace(_options.PrivateKeyContent))
         {
@@ -95,13 +95,22 @@ public sealed class SshNodeConnection : INodeConnection
     {
         var sshArgs = new List<string>(BuildSshArguments())
         {
-            $"{_options.User}@{_options.Host}",
-            command.Executable
+            $"{_options.User}@{_options.Host}"
         };
 
-        foreach (var arg in command.Arguments)
+        if (string.Equals(command.Executable, "sh", StringComparison.Ordinal) &&
+            command.Arguments.Count == 2 &&
+            string.Equals(command.Arguments[0], "-c", StringComparison.Ordinal))
         {
-            sshArgs.Add(arg);
+            sshArgs.Add(command.Arguments[1]);
+        }
+        else
+        {
+            sshArgs.Add(command.Executable);
+            foreach (var arg in command.Arguments)
+            {
+                sshArgs.Add(arg);
+            }
         }
 
         return new ProcessSpec
@@ -183,7 +192,9 @@ public sealed class SshNodeConnection : INodeConnection
         {
             "-p", _options.Port.ToString(CultureInfo.InvariantCulture),
             "-o", "BatchMode=yes",
-            "-o", "StrictHostKeyChecking=accept-new"
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "IdentitiesOnly=yes"
         };
 
         if (!string.IsNullOrEmpty(_controlSocketPath))
