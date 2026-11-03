@@ -4,7 +4,7 @@
 
 - **Total Files**: 160
 - **Total Lines of Code**: 22231
-- **Total Size**: 842.0 KB
+- **Total Size**: 842.1 KB
 - **Root Directory**: `/root/src/starry`
 
 ## Repository Structure
@@ -21803,7 +21803,7 @@ public class LiveMultiNodeSshClusterE2ETests
 
 ## File: tests/Starry.E2ETests/V3PipelineIntegrationTests.cs
 
-**Lines**: 244 | **Size**: 10.0 KB | **Language**: csharp
+**Lines**: 244 | **Size**: 10.2 KB | **Language**: csharp
 
 ```csharp
 using System.Globalization;
@@ -22004,13 +22004,13 @@ public class V3PipelineIntegrationTests
             var routes = DomainRoutingService.TraverseDomains(tree);
             Assert.Equal(2, routes.Count);
 
-            var shopRoute = routes.FirstOrDefault(r => r.FullHostname == "shop.bocchi.rocks");
+            var shopRoute = routes.FirstOrDefault(r => string.Equals(r.FullHostname, "shop.bocchi.rocks", StringComparison.Ordinal));
             Assert.NotNull(shopRoute);
             Assert.Equal("bocchi.rocks", shopRoute.ZoneDomain);
             Assert.Equal("shop-web:3000", shopRoute.HttpTarget);
             Assert.Equal(8443, shopRoute.EntryPort);
 
-            var vpnRoute = routes.FirstOrDefault(r => r.FullHostname == "vpn.bocchi.rocks");
+            var vpnRoute = routes.FirstOrDefault(r => string.Equals(r.FullHostname, "vpn.bocchi.rocks", StringComparison.Ordinal));
             Assert.NotNull(vpnRoute);
             Assert.Equal("xray:8443", vpnRoute.SniTarget);
             Assert.True(vpnRoute.ProxyProtocol);
@@ -22033,7 +22033,7 @@ public class V3PipelineIntegrationTests
             await orchestrator.ExecutePlanAsync(plan, tree, [node1, node2]);
 
             // Verify DNS records were upserted
-            Assert.Contains(mockDns.UpsertedRecords, r => r.Record.Name == "shop.bocchi.rocks" && r.Zone == "bocchi.rocks");
+            Assert.Contains(mockDns.UpsertedRecords, r => string.Equals(r.Record.Name, "shop.bocchi.rocks", StringComparison.Ordinal) && string.Equals(r.Zone, "bocchi.rocks", StringComparison.Ordinal));
 
             // 5. Test Split with v3 structures
             var splitDir = Path.Combine(tempDir, "split_output");
