@@ -1437,7 +1437,7 @@ public sealed partial class ClusterOrchestrator
         var targetVip = targetHost;
         if (targetHost.StartsWith("$ingress", StringComparison.OrdinalIgnoreCase) || string.Equals(targetHost, "ingress", StringComparison.OrdinalIgnoreCase))
         {
-            targetVip = "fd67:b00b:0001:ffff::1";
+            targetVip = IdLedgerService.FormatIngressIp(1);
         }
         else if (config.Root["services"]?[targetHost] is JsonObject targetSvc)
         {
