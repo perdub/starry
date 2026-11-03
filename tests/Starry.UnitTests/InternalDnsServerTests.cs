@@ -17,7 +17,7 @@ public class InternalDnsServerTests
         // Construct a standard DNS query packet for "api.internal" (Type A, Class IN)
         var query = BuildQueryPacket("api.internal");
 
-        var response = server.HandleDnsQuery(query);
+        var response = await server.HandleDnsQueryAsync(query);
         Assert.NotNull(response);
 
         // Check header flags in response (0x8180 = standard response, no error)
@@ -39,7 +39,7 @@ public class InternalDnsServerTests
         server.RegisterRecord("bocchi.internal", IPAddress.Parse("10.99.0.1"));
 
         var query = BuildQueryPacket("unknown.internal");
-        var response = server.HandleDnsQuery(query);
+        var response = await server.HandleDnsQueryAsync(query);
 
         Assert.NotNull(response);
         // Flags: 0x8183 = NXDOMAIN
@@ -56,7 +56,7 @@ public class InternalDnsServerTests
         server.RegisterRecord("bocchi.internal", IPAddress.Parse("10.99.0.1"));
 
         var query = BuildQueryPacket("bocchi.internal", qtype: 28); // 28 = AAAA
-        var response = server.HandleDnsQuery(query);
+        var response = await server.HandleDnsQueryAsync(query);
 
         Assert.NotNull(response);
         // Flags: 0x8180 = NOERROR

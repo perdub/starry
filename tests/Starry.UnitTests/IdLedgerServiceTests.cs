@@ -40,8 +40,8 @@ public class IdLedgerServiceTests
         try
         {
             var ledger = new IdLedgerService(tempDir);
-            var id1 = ledger.AllocateHostId("germany"); // 1
-            var id2 = ledger.AllocateHostId("finland"); // 2
+            ledger.AllocateHostId("germany"); // 1
+            ledger.AllocateHostId("finland"); // 2
 
             // Release germany (ID 1 should be tombstoned)
             ledger.ReleaseHost("germany");
@@ -69,8 +69,8 @@ public class IdLedgerServiceTests
         try
         {
             var ledger = new IdLedgerService(tempDir);
-            var c1 = ledger.AllocateContainerId("shop#1"); // 1
-            var c2 = ledger.AllocateContainerId("shop#2"); // 2
+            ledger.AllocateContainerId("shop#1"); // 1
+            ledger.AllocateContainerId("shop#2"); // 2
 
             ledger.ReleaseContainer("shop#1");
 

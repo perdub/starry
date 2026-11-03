@@ -21268,7 +21268,7 @@ public class FleetBundleServiceTests
 
 ## File: tests/Starry.UnitTests/IdLedgerServiceTests.cs
 
-**Lines**: 98 | **Size**: 3.2 KB | **Language**: csharp
+**Lines**: 98 | **Size**: 3.1 KB | **Language**: csharp
 
 ```csharp
 using Starry.Infrastructure.Network;
@@ -21313,8 +21313,8 @@ public class IdLedgerServiceTests
         try
         {
             var ledger = new IdLedgerService(tempDir);
-            var id1 = ledger.AllocateHostId("germany"); // 1
-            var id2 = ledger.AllocateHostId("finland"); // 2
+            ledger.AllocateHostId("germany"); // 1
+            ledger.AllocateHostId("finland"); // 2
 
             // Release germany (ID 1 should be tombstoned)
             ledger.ReleaseHost("germany");
@@ -21342,8 +21342,8 @@ public class IdLedgerServiceTests
         try
         {
             var ledger = new IdLedgerService(tempDir);
-            var c1 = ledger.AllocateContainerId("shop#1"); // 1
-            var c2 = ledger.AllocateContainerId("shop#2"); // 2
+            ledger.AllocateContainerId("shop#1"); // 1
+            ledger.AllocateContainerId("shop#2"); // 2
 
             ledger.ReleaseContainer("shop#1");
 
@@ -21533,7 +21533,7 @@ public class InternalDnsServerScopedTests
 
 ## File: tests/Starry.UnitTests/InternalDnsServerTests.cs
 
-**Lines**: 97 | **Size**: 3.0 KB | **Language**: csharp
+**Lines**: 97 | **Size**: 3.1 KB | **Language**: csharp
 
 ```csharp
 using System.Net;
@@ -21555,7 +21555,7 @@ public class InternalDnsServerTests
         // Construct a standard DNS query packet for "api.internal" (Type A, Class IN)
         var query = BuildQueryPacket("api.internal");
 
-        var response = server.HandleDnsQuery(query);
+        var response = await server.HandleDnsQueryAsync(query);
         Assert.NotNull(response);
 
         // Check header flags in response (0x8180 = standard response, no error)
@@ -21577,7 +21577,7 @@ public class InternalDnsServerTests
         server.RegisterRecord("bocchi.internal", IPAddress.Parse("10.99.0.1"));
 
         var query = BuildQueryPacket("unknown.internal");
-        var response = server.HandleDnsQuery(query);
+        var response = await server.HandleDnsQueryAsync(query);
 
         Assert.NotNull(response);
         // Flags: 0x8183 = NXDOMAIN
@@ -21594,7 +21594,7 @@ public class InternalDnsServerTests
         server.RegisterRecord("bocchi.internal", IPAddress.Parse("10.99.0.1"));
 
         var query = BuildQueryPacket("bocchi.internal", qtype: 28); // 28 = AAAA
-        var response = server.HandleDnsQuery(query);
+        var response = await server.HandleDnsQueryAsync(query);
 
         Assert.NotNull(response);
         // Flags: 0x8180 = NOERROR
