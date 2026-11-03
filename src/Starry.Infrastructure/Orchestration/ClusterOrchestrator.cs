@@ -642,7 +642,7 @@ public sealed partial class ClusterOrchestrator
             networks = ["default"];
         }
 
-        return new ServiceSpec
+        var spec = new ServiceSpec
         {
             Name = serviceName,
             Image = image,
@@ -658,7 +658,16 @@ public sealed partial class ClusterOrchestrator
             Volumes = ExtractServiceVolumes(serviceObj, config),
             Labels = ExtractStringDictionary(serviceObj, "labels"),
             Environment = ExtractServiceEnvironment(serviceName, serviceObj, config),
-            Files = ExtractServiceFiles(serviceName, serviceObj, config),
+            Files = ExtractServiceFiles(serviceName, serviceObj, config)
+        };
+
+        return PopulateComposeOptions(spec, serviceObj);
+    }
+
+    private static ServiceSpec PopulateComposeOptions(ServiceSpec spec, JsonObject serviceObj)
+    {
+        return spec with
+        {
             Command = serviceObj["command"]?.ToString() ?? serviceObj["cmd"]?.ToString(),
             Entrypoint = serviceObj["entrypoint"]?.ToString(),
             WorkingDir = serviceObj["working_dir"]?.ToString() ?? serviceObj["workdir"]?.ToString(),

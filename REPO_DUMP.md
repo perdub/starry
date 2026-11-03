@@ -3,8 +3,8 @@
 ## Overview
 
 - **Total Files**: 160
-- **Total Lines of Code**: 22169
-- **Total Size**: 841.0 KB
+- **Total Lines of Code**: 22178
+- **Total Size**: 841.2 KB
 - **Root Directory**: `/root/src/starry`
 
 ## Repository Structure
@@ -15683,7 +15683,7 @@ public sealed record SshNodeOptions
 
 ## File: src/Starry.Infrastructure/Orchestration/ClusterOrchestrator.cs
 
-**Lines**: 1618 | **Size**: 61.3 KB | **Language**: csharp
+**Lines**: 1627 | **Size**: 61.6 KB | **Language**: csharp
 
 ```csharp
 using System.Globalization;
@@ -16330,7 +16330,7 @@ public sealed partial class ClusterOrchestrator
             networks = ["default"];
         }
 
-        return new ServiceSpec
+        var spec = new ServiceSpec
         {
             Name = serviceName,
             Image = image,
@@ -16346,7 +16346,16 @@ public sealed partial class ClusterOrchestrator
             Volumes = ExtractServiceVolumes(serviceObj, config),
             Labels = ExtractStringDictionary(serviceObj, "labels"),
             Environment = ExtractServiceEnvironment(serviceName, serviceObj, config),
-            Files = ExtractServiceFiles(serviceName, serviceObj, config),
+            Files = ExtractServiceFiles(serviceName, serviceObj, config)
+        };
+
+        return PopulateComposeOptions(spec, serviceObj);
+    }
+
+    private static ServiceSpec PopulateComposeOptions(ServiceSpec spec, JsonObject serviceObj)
+    {
+        return spec with
+        {
             Command = serviceObj["command"]?.ToString() ?? serviceObj["cmd"]?.ToString(),
             Entrypoint = serviceObj["entrypoint"]?.ToString(),
             WorkingDir = serviceObj["working_dir"]?.ToString() ?? serviceObj["workdir"]?.ToString(),
