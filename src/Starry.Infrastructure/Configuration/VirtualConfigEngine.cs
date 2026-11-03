@@ -55,7 +55,7 @@ public sealed class VirtualConfigEngine
         return tree;
     }
 
-    public void ResolveGraph(ConfigTree tree, Func<string, string>? secretDecryptor = null)
+    public static void ResolveGraph(ConfigTree tree, Func<string, string>? secretDecryptor = null)
     {
         ArgumentNullException.ThrowIfNull(tree);
 
