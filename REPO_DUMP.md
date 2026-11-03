@@ -3,7 +3,7 @@
 ## Overview
 
 - **Total Files**: 157
-- **Total Lines of Code**: 21090
+- **Total Lines of Code**: 21105
 - **Total Size**: 798.3 KB
 - **Root Directory**: `/root/src/starry`
 
@@ -7229,7 +7229,7 @@ starry encrypt global --reencrypt \
 
 ## File: src/Starry.Cli/Program.cs
 
-**Lines**: 1405 | **Size**: 54.6 KB | **Language**: csharp
+**Lines**: 1420 | **Size**: 54.7 KB | **Language**: csharp
 
 ```csharp
 ﻿using System.Globalization;
@@ -8107,39 +8107,13 @@ internal static class Program
             try
             {
                 var ledger = new IdLedgerService(configPath);
-                var table = new Table().Border(TableBorder.Rounded);
-                table.AddColumn("[bold]Node & Host ID[/]");
-                table.AddColumn("[bold]Interface[/]");
-                table.AddColumn("[bold]IPv4 Addresses[/]");
-                table.AddColumn("[bold]IPv6 Subnets / Addresses[/]");
-                table.AddColumn("[bold]Classification / Verification[/]");
+                var table = CreateNetInterfacesTable();
 
                 foreach (var node in nodes)
                 {
                     var hostId = ledger.AllocateHostId(node.NodeName);
                     var report = await NodeNetworkInspector.InspectNodeAsync(node, hostId, verify).ConfigureAwait(false);
-
-                    foreach (var iface in report.Interfaces)
-                    {
-                        var statusMarkup = iface.Classification switch
-                        {
-                            InterfaceClassification.DedicatedPublic => "[green]DEDICATED PUBLIC[/]",
-                            InterfaceClassification.RoutedIpv6Subnet => "[cyan]ROUTED /64 SUBNET[/]",
-                            InterfaceClassification.BehindNatOrCgnat => "[yellow]BEHIND NAT / CGNAT[/]",
-                            InterfaceClassification.Firewalled => "[red]FIREWALLED[/]",
-                            _ => "[grey]INTERNAL ONLY[/]"
-                        };
-
-                        var v4 = iface.Ipv4Addresses.Count > 0 ? string.Join("\n", iface.Ipv4Addresses) : "-";
-                        var v6 = iface.Ipv6Addresses.Count > 0 ? string.Join("\n", iface.Ipv6Addresses) : "-";
-
-                        table.AddRow(
-                            $"{report.NodeName}\n[grey]{report.MeshIpv6}[/]",
-                            iface.InterfaceName,
-                            v4,
-                            v6,
-                            statusMarkup);
-                    }
+                    PopulateNetInterfacesRows(table, report);
                 }
 
                 AnsiConsole.Write(table);
@@ -8157,6 +8131,42 @@ internal static class Program
         {
             AnsiConsole.MarkupLine($"[red]Network inspection failed: {Markup.Escape(ex.Message)}[/]");
             return 1;
+        }
+    }
+
+    private static Table CreateNetInterfacesTable()
+    {
+        var table = new Table().Border(TableBorder.Rounded);
+        table.AddColumn("[bold]Node & Host ID[/]");
+        table.AddColumn("[bold]Interface[/]");
+        table.AddColumn("[bold]IPv4 Addresses[/]");
+        table.AddColumn("[bold]IPv6 Subnets / Addresses[/]");
+        table.AddColumn("[bold]Classification / Verification[/]");
+        return table;
+    }
+
+    private static void PopulateNetInterfacesRows(Table table, NodeNetworkReport report)
+    {
+        foreach (var iface in report.Interfaces)
+        {
+            var statusMarkup = iface.Classification switch
+            {
+                InterfaceClassification.DedicatedPublic => "[green]DEDICATED PUBLIC[/]",
+                InterfaceClassification.RoutedIpv6Subnet => "[cyan]ROUTED /64 SUBNET[/]",
+                InterfaceClassification.BehindNatOrCgnat => "[yellow]BEHIND NAT / CGNAT[/]",
+                InterfaceClassification.Firewalled => "[red]FIREWALLED[/]",
+                _ => "[grey]INTERNAL ONLY[/]"
+            };
+
+            var v4 = iface.Ipv4Addresses.Count > 0 ? string.Join("\n", iface.Ipv4Addresses) : "-";
+            var v6 = iface.Ipv6Addresses.Count > 0 ? string.Join("\n", iface.Ipv6Addresses) : "-";
+
+            table.AddRow(
+                $"{report.NodeName}\n[grey]{report.MeshIpv6}[/]",
+                iface.InterfaceName,
+                v4,
+                v6,
+                statusMarkup);
         }
     }
 
@@ -8482,69 +8492,74 @@ internal static class Program
     private static async Task<int> HandleVolumeCommand(string[] args)
     {
         var subCommand = args.Length > 0 ? args[0] : "help";
-        if (string.Equals(subCommand, "open", StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(subCommand, "open", StringComparison.OrdinalIgnoreCase))
         {
-            var configPath = ExtractOptionValue(args, "--config") ?? ".";
-            var once = args.Any(a => string.Equals(a, "--once", StringComparison.OrdinalIgnoreCase));
-
-            try
-            {
-                var engine = new VirtualConfigEngine();
-                var tree = engine.Load(configPath);
-                var orchestrator = new ClusterOrchestrator();
-
-                string nodeName;
-                string volumePath;
-
-                if (args.Length >= 2 && tree.Root["volumes"]?[args[1]] is JsonObject volObj)
-                {
-                    nodeName = volObj["node"]?.ToString() ?? "node-1";
-                    volumePath = volObj["path"]?.ToString() ?? $"/var/lib/docker/volumes/{args[1]}/_data";
-                }
-                else if (args.Length >= 3)
-                {
-                    nodeName = args[1];
-                    volumePath = args[2];
-                }
-                else
-                {
-                    AnsiConsole.MarkupLine("[red]Usage: starry volume open <volume_name | node volumePath> [--config <path>] [--once][/]");
-                    return 1;
-                }
-
-                var nodeObj = tree.Root["nodes"]?[nodeName] as JsonObject
-                    ?? throw new InvalidOperationException($"Node '{nodeName}' not found in configuration.");
-
-                await using var conn = await orchestrator.ResolveNodeConnectionAsync(nodeName, nodeObj).ConfigureAwait(false);
-
-                AnsiConsole.MarkupLine($"[bold yellow]Querying volume files for '[cyan]{Markup.Escape(volumePath)}[/]' on '[cyan]{Markup.Escape(nodeName)}[/]'...[/]");
-                var safeVol = "'" + volumePath.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
-                var listResult = await conn.ExecuteCommandAsync(new ProcessSpec
-                {
-                    Executable = "sh",
-                    Arguments = ["-c", $"ls -la {safeVol} 2>/dev/null || ls -la /var/lib/docker/volumes/{safeVol}/_data 2>/dev/null || echo 'Empty or not found'"]
-                }).ConfigureAwait(false);
-
-                AnsiConsole.MarkupLine("[green]✓ Volume contents:[/]");
-                AnsiConsole.WriteLine(listResult.StandardOutput);
-
-                if (once)
-                {
-                    return 0;
-                }
-
-                AnsiConsole.MarkupLine("[grey]Volume explorer listening at sftp/ssh bridge. Press Ctrl+C to stop.[/]");
-                return 0;
-            }
-            catch (Exception ex)
-            {
-                AnsiConsole.MarkupLine($"[red]Volume open failed: {Markup.Escape(ex.Message)}[/]");
-                return 1;
-            }
+            AnsiConsole.MarkupLine("[yellow]Usage: starry volume open <volume_name | node volumePath> [--once][/]");
+            return 0;
         }
 
-        AnsiConsole.MarkupLine("[yellow]Usage: starry volume open <node> <volumePath> [--once][/]");
-        return 0;
+        var configPath = ExtractOptionValue(args, "--config") ?? ".";
+        var once = args.Any(a => string.Equals(a, "--once", StringComparison.OrdinalIgnoreCase));
+
+        try
+        {
+            var engine = new VirtualConfigEngine();
+            var tree = engine.Load(configPath);
+            var target = ResolveVolumeTarget(args, tree);
+            if (target == null)
+            {
+                AnsiConsole.MarkupLine("[red]Usage: starry volume open <volume_name | node volumePath> [--config <path>] [--once][/]");
+                return 1;
+            }
+
+            var (nodeName, volumePath) = target.Value;
+            var orchestrator = new ClusterOrchestrator();
+            var nodeObj = tree.Root["nodes"]?[nodeName] as JsonObject
+                ?? throw new InvalidOperationException($"Node '{nodeName}' not found in configuration.");
+
+            await using var conn = await orchestrator.ResolveNodeConnectionAsync(nodeName, nodeObj).ConfigureAwait(false);
+
+            AnsiConsole.MarkupLine($"[bold yellow]Querying volume files for '[cyan]{Markup.Escape(volumePath)}[/]' on '[cyan]{Markup.Escape(nodeName)}[/]'...[/]");
+            var safeVol = "'" + volumePath.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
+            var listResult = await conn.ExecuteCommandAsync(new ProcessSpec
+            {
+                Executable = "sh",
+                Arguments = ["-c", $"ls -la {safeVol} 2>/dev/null || ls -la /var/lib/docker/volumes/{safeVol}/_data 2>/dev/null || echo 'Empty or not found'"]
+            }).ConfigureAwait(false);
+
+            AnsiConsole.MarkupLine("[green]✓ Volume contents:[/]");
+            AnsiConsole.WriteLine(listResult.StandardOutput);
+
+            if (once)
+            {
+                return 0;
+            }
+
+            AnsiConsole.MarkupLine("[grey]Volume explorer listening at sftp/ssh bridge. Press Ctrl+C to stop.[/]");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]Volume open failed: {Markup.Escape(ex.Message)}[/]");
+            return 1;
+        }
+    }
+
+    private static (string NodeName, string VolumePath)? ResolveVolumeTarget(string[] args, ConfigTree tree)
+    {
+        if (args.Length >= 2 && tree.Root["volumes"]?[args[1]] is JsonObject volObj)
+        {
+            var node = volObj["node"]?.ToString() ?? "node-1";
+            var path = volObj["path"]?.ToString() ?? $"/var/lib/docker/volumes/{args[1]}/_data";
+            return (node, path);
+        }
+
+        if (args.Length >= 3)
+        {
+            return (args[1], args[2]);
+        }
+
+        return null;
     }
 
     private static Task<int> HandleBundleCommand(string[] args)
