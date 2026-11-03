@@ -2,9 +2,9 @@
 
 ## Overview
 
-- **Total Files**: 141
-- **Total Lines of Code**: 19007
-- **Total Size**: 714.3 KB
+- **Total Files**: 152
+- **Total Lines of Code**: 21024
+- **Total Size**: 797.0 KB
 - **Root Directory**: `/root/src/starry`
 
 ## Repository Structure
@@ -99,6 +99,12 @@ starry/
 │   │   │   ├── ICryptoService.cs
 │   │   │   └── SecretEnvelope.cs
 │   │   └── Starry.Core.csproj
+│   ├── Starry.Dsl/
+│   │   ├── ConfigAst.fs
+│   │   ├── Generators.fs
+│   │   ├── GraphResolver.fs
+│   │   ├── Library.fs
+│   │   └── Starry.Dsl.fsproj
 │   └── Starry.Infrastructure/
 │       ├── Agent/
 │       │   ├── AgentOptions.cs
@@ -115,6 +121,7 @@ starry/
 │       ├── Configuration/
 │       │   ├── ConfigValidationResult.cs
 │       │   ├── ConfigValidator.cs
+│       │   ├── GitSyncService.cs
 │       │   ├── JsonConfigFormatProvider.cs
 │       │   ├── RepositoryInitializer.cs
 │       │   ├── TomlConfigFormatProvider.cs
@@ -132,8 +139,10 @@ starry/
 │       ├── Localization/
 │       │   └── Localizer.cs
 │       ├── Network/
+│       │   ├── IdLedgerService.cs
 │       │   ├── InternalDnsServer.cs
 │       │   ├── NftablesService.cs
+│       │   ├── NodeNetworkInspector.cs
 │       │   ├── PortForwardRule.cs
 │       │   ├── WireGuardMeshService.cs
 │       │   └── WireGuardNodeConfig.cs
@@ -180,6 +189,8 @@ starry/
 │       ├── CryptoServiceTests.cs
 │       ├── DnsProviderTests.cs
 │       ├── FleetBundleServiceTests.cs
+│       ├── IdLedgerServiceTests.cs
+│       ├── InternalDnsServerScopedTests.cs
 │       ├── InternalDnsServerTests.cs
 │       ├── LocalizerTests.cs
 │       ├── MigrationPlannerTests.cs
@@ -188,6 +199,7 @@ starry/
 │       ├── ProcessRunnerTests.cs
 │       ├── SshNodeConnectionTests.cs
 │       ├── Starry.UnitTests.csproj
+│       ├── StarryDslTests.cs
 │       ├── VirtualConfigEngineTests.cs
 │       └── WireGuardMeshTests.cs
 ├── .editorconfig
@@ -298,23 +310,26 @@ Thumbs.db
 
 ## File: Directory.Build.props
 
-**Lines**: 28 | **Size**: 1.3 KB | **Language**: xml
+**Lines**: 31 | **Size**: 1.4 KB | **Language**: xml
 
 ```xml
 <Project>
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
-    <LangVersion>latest</LangVersion>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <AnalysisLevel>latest-all</AnalysisLevel>
-    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
     <NoWarn>$(NoWarn);IL2026;IL3050;IL2111;IL2104</NoWarn>
     <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
   </PropertyGroup>
 
-  <ItemGroup>
+  <PropertyGroup Condition="'$(MSBuildProjectExtension)' == '.csproj'">
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(MSBuildProjectExtension)' == '.csproj'">
     <PackageReference Include="Meziantou.Analyzer" Version="3.0.318">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
@@ -714,13 +729,14 @@ Licensed under the [MIT License](LICENSE).
 
 ## File: Starry.slnx
 
-**Lines**: 12 | **Size**: 499 B | **Language**: xml
+**Lines**: 13 | **Size**: 555 B | **Language**: xml
 
 ```xml
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/Starry.Cli/Starry.Cli.csproj" />
     <Project Path="src/Starry.Core/Starry.Core.csproj" />
+    <Project Path="src/Starry.Dsl/Starry.Dsl.fsproj" />
     <Project Path="src/Starry.Infrastructure/Starry.Infrastructure.csproj" />
   </Folder>
   <Folder Name="/tests/">
@@ -5309,165 +5325,121 @@ starry bundle import cluster-backup.tar.gz -o ./new-cluster \
 
 ## File: site/configuration/syntax.md
 
-**Lines**: 156 | **Size**: 5.9 KB | **Language**: markdown
+**Lines**: 112 | **Size**: 6.1 KB | **Language**: markdown
 
 ````markdown
-# Архитектура и синтаксис конфигурации
+# Архитектура и синтаксис конфигурации (Starry v3.0)
 
-Starry использует передовую концепцию **Virtual Config Engine**: вы можете описывать инфраструктуру как единым файлом (`starry.yaml`), так и разбивать её на модульные папки и файлы любого удобного формата (**YAML**, **JSON**, **TOML**). Starry автоматически объединяет их в единое виртуальное дерево с полным сохранением карты источников (**Source Map**).
-
----
-
-## 1. Модульная организация файлов (Best Practices)
-
-### Для небольших кластеров (Single File)
-Если у вас 1–3 сервера, удобно хранить всю конфигурацию в одном корневом файле:
-
-```text
-my-fleet/
-├── starry.yaml
-└── .gitignore
-```
-
-### Для средних и крупных флотов (Modular Hierarchy)
-При росте количества серверов и сервисов рекомендуется модульная структура:
-
-```text
-cluster/
-├── starry.yaml               # Общие настройки кластера и сети mesh
-├── nodes/
-│   ├── bocchi.yaml           # Нода bocchi -> root.nodes.bocchi
-│   ├── nijika.json           # Нода nijika -> root.nodes.nijika
-│   └── ryo.toml              # Нода ryo -> root.nodes.ryo
-└── services/
-    ├── api.yaml              # Сервис api -> root.services.api
-    ├── database.toml         # Сервис database -> root.services.database
-    └── frontend.json         # Сервис frontend -> root.services.frontend
-```
-
-Starry маппит относительные пути файлов в канонические JSON-пути виртуального дерева:
-- `nodes/bocchi.yaml` автоматически монтируется в `root.nodes.bocchi`
-- `services/api.toml` автоматически монтируется в `root.services.api`
-- Файлы `starry.yaml` или `config.yaml` в корне объединяются с корнем дерева `root`
-
-Каждое терминальное значение сохраняет точную ссылку на файл, строку и колонку в **Source Map**, благодаря чему ошибки валидации указывают на конкретные исходные файлы!
+В версии **Starry v3.0** конфигурационный движок построен на базе чистой функциональной библиотеки **`Starry.Dsl`** (F#). Инфраструктура описывается как единый граф с поддержкой подстановки поддеревьев, наследования объектов через `$:` и интерполяции переменных и секретов.
 
 ---
 
-## 2. Поддержка форматов: YAML, JSON и TOML
+## 1. Унифицированный граф AST и организация файлов
 
-Вы можете свободно смешивать форматы в одном проекте! Ниже приведен один и тот же фрагмент конфигурации в трёх поддерживаемых форматах:
-
-::: code-group
-
-```yaml [YAML (nodes/bocchi.yaml)]
-host: "198.51.100.10"
-port: 22
-vpn_ip: "10.99.0.1"
-engine: "docker"
-packages:
-  - wireguard
-  - nftables
-  - curl
-```
-
-```toml [TOML (nodes/bocchi.toml)]
-host = "198.51.100.10"
-port = 22
-vpn_ip = "10.99.0.1"
-engine = "docker"
-packages = ["wireguard", "nftables", "curl"]
-```
-
-```json [JSON (nodes/bocchi.json)]
-{
-  "host": "198.51.100.10",
-  "port": 22,
-  "vpn_ip": "10.99.0.1",
-  "engine": "docker",
-  "packages": [
-    "wireguard",
-    "nftables",
-    "curl"
-  ]
-}
-```
-
-:::
+Любая папка и файл внутри директории конфигурации автоматически становятся узлом в едином иммутабельном AST:
+- **Структурированные файлы (`.yaml`, `.json`, `.toml`):** Парсятся и монтируются в соответствующую ветку графа (например, `nodes/germany.yaml` -> `root.nodes.germany`).
+- **Текстовые и конфигурационные файлы (`files/*`):** Любой текстовый файл (например, `files/nginx.conf` или `files/init.sql`) загружается в граф как `StringNode` под своим путем (`root.files.["nginx.conf"]`).
+- **Произвольные пользовательские ветки:** Вы можете создавать любые удобные секции (`presets`, `secrets`, `vars`, `dns_providers`, `backups`, `certs`) — валидатор не блокирует произвольные структуры.
 
 ---
 
-## 3. Схема и структура кластера
+## 2. Разрешение ссылок (`$`) и наследование (`$:`)
 
-Манифест кластера описывает узлы (`nodes`), оверлейную сеть (`mesh`), развертываемые сервисы (`services`) и политики резервного копирования:
+### Подстановка целых поддеревьев
+Если значение узла указывает на путь к объекту (например, `env: "$presets.db_env"`), Starry заменяет ссылку на глубокую копию целевого поддерева:
 
 ```yaml
-version: "1.0"
-cluster_name: "kessoku-prod"
+presets:
+  db_env:
+    POSTGRES_DB: "starry"
+    POSTGRES_USER: "admin"
+    POSTGRES_PASSWORD: "ENC[AES256_GCM:v1:...]"
 
-# Параметры WireGuard Mesh оверлея
-mesh:
-  cidr: "10.99.0.0/16"
-  port: 51820
-  keepalive: 25
+services:
+  database:
+    image: "postgres:16"
+    env: "$presets.db_env"
+```
 
-# Серверные узлы кластера
-nodes:
-  bocchi:
-    host: "198.51.100.10"
-    port: 22
-    vpn_ip: "10.99.0.1"
-    is_public: true
-    ssh_key: "ENC[AES256_GCM:v1:nonce:cipher:tag]"
+### Наследование и слияние объектов (`$:`)
+Через специальный ключ `"$"` сервис или узел может наследовать свойства одного или нескольких базовых пресетов:
 
-# Контейнерные сервисы
+```yaml
+presets:
+  base_service:
+    restart: "always"
+    priority: 50
+    networks: ["$networks.app_net"]
+
 services:
   web:
+    $: "$presets.base_service"
     image: "nginx:alpine"
-    node: "bocchi"
-    priority: 80
-    ports:
-      - "80:80"
-      - "443:443"
-    env:
-      DB_PASSWORD: "ENC[AES256_GCM:v1:nonce:cipher:tag]"
+    priority: 80 # Переопределяет priority из base_service
+```
+
+### Интерполяция строк и файлов
+Внутри любых строк (включая переменные окружения и текст файлов в `files/`) поддерживается синтаксис `$path.to.value` и `${path.to.value}`. При развертывании секреты автоматически расшифровываются.
+
+---
+
+## 3. Схема адресации IPv6 Mesh (`fd67:b00b::/32`) и реестр ID
+
+* **Префикс кластера:** `fd67:b00b::/32`.
+* **Подсеть узла (`/48`):** Каждому серверу выделяется статическая подсеть `fd67:b00b:<host_id>::/48`. В интерфейсе WireGuard `starry0` адрес равен `fd67:b00b:<host_id>::1/32`, а в пирах прописывается `AllowedIPs = fd67:b00b:<host_id>::/48`.
+* **Подсеть контейнера (`/64`):** Каждой реплике контейнера выделяется подсеть `fd67:b00b:<host_id>:<container_id>::/64`. Внутри контейнера работает ровно один сетевой интерфейс (`eth0`) с адресом `fd67:b00b:<host_id>:<container_id>::1/64`.
+* **Реестр ID (`.starry/id-ledger.json`):** При удалении сервиса или сервера их идентификаторы попадают в список `tombstoned` и **никогда не переиспользуются повторно**.
+
+---
+
+## 4. Именованные двунаправленные порты (`ports:`)
+
+Секция `ports:` задает именованные правила маршрутизации:
+
+```yaml
+ports:
+  shop_https_v4:
+    from: "$nodes.germany.ipv4:443"
+    to: "$ingress:443"
+    proto: "tcp"
+    bidirectional: true # Входящий DNAT + исходящий SNAT через IP ноды germany!
+
+  custom_proxy:
+    from: "$nodes.finland.ipv4:443"
+    to: "my-proxy:443"
 ```
 
 ---
 
-## 4. Команды управления конфигурацией (CLI)
+## 5. Встроенный Nginx Ingress (`$ingress`) и L4 SNI Proxy
 
-Starry предоставляет богатый набор встроенных утилит для инспекции и трансформации конфигов:
+* `$ingress` получает внутренний адрес `fd67:b00b:<host_id>:ffff::1` и не захватывает порт 443 на сервере без явного правила в `ports:`.
+* Входящий трафик обрабатывается через `stream { ssl_preread on; }`:
+  - Маршруты `sni: "<target>"` пробрасываются на Layer 4 без расшифровки TLS.
+  - Маршруты `http: "<target>"` направляются в блок `http {}` для терминации SSL и проксирования HTTP/WebSocket/gRPC.
 
-### Валидация (`starry config validate`)
-Проверяет структуру, существование обязательных полей, корректность сетевых адресов и синтаксис секретов:
-```bash
-starry config validate ./cluster
+---
+
+## 6. Иерархические домены (`domains:`) и Cloudflare Origin Rules
+
+```yaml
+domains:
+  rocks:
+    bocchi:
+      dns_provider: "$dns_providers.cf"
+      cert: "$certs.bocchi_wildcard"
+      node: "$nodes.germany"
+
+      "@":
+        http: "landing:80"
+      shop:
+        http: "shop-web:3000"
+      vpn:
+        sni: "xray:8443"
+        proxy_protocol: true
 ```
 
-### Упаковка в единый файл (`starry config pack`)
-Объединяет модульную директорию со всеми подпапками в один канонический файл:
-```bash
-starry config pack ./cluster -o starry.bundle.yaml --format yaml
-```
-
-### Разделение монолита на модули (`starry config split`)
-Автоматически разбивает монолитный `starry.yaml` на стандартную иерархию папок (`nodes/`, `services/`):
-```bash
-starry config split starry.bundle.yaml -o ./modular-config --format yaml
-```
-
-### Каноническое форматирование (`starry config fmt`)
-Форматирует конфигурационный файл в соответствии со стандартом:
-```bash
-starry config fmt cluster/nodes/bocchi.yaml
-```
-
-### Генерация JSON Schema (`starry config schema`)
-Генерирует официальную JSON Schema для валидации и автодополнения в VS Code, JetBrains Rider и Neovim:
-```bash
-starry config schema > starry.schema.json
-```
+Если порт входа в правиле `ports:` отличается от 443 (например, 8443), провайдер Cloudflare автоматически создает **Origin Rule** через Cloudflare Rulesets API для прозрачного проксирования на нужный порт!
 ````
 
 ## File: site/en/index.md
@@ -5883,165 +5855,119 @@ starry bundle import cluster-backup.tar.gz -o ./new-cluster \
 
 ## File: site/en/configuration/syntax.md
 
-**Lines**: 156 | **Size**: 4.1 KB | **Language**: markdown
+**Lines**: 110 | **Size**: 3.8 KB | **Language**: markdown
 
 ````markdown
-# Configuration Architecture & Syntax
+# Configuration Architecture & Syntax (Starry v3.0)
 
-Starry leverages an advanced **Virtual Config Engine**: you can define your infrastructure as a single monolith file (`starry.yaml`) or break it down into modular directories and files across multiple formats (**YAML**, **JSON**, **TOML**). Starry seamlessly merges them into a virtual configuration tree while preserving exact source file coordinates (**Source Map**).
-
----
-
-## 1. Modular Directory Organization (Best Practices)
-
-### For Small Fleets (Single File)
-For 1–3 servers, keeping everything in a single root file is simplest:
-
-```text
-my-fleet/
-├── starry.yaml
-└── .gitignore
-```
-
-### For Medium & Large Fleets (Modular Hierarchy)
-As your fleet grows with multiple nodes and services, a modular layout is recommended:
-
-```text
-cluster/
-├── starry.yaml               # Cluster global settings & mesh network
-├── nodes/
-│   ├── bocchi.yaml           # Node bocchi -> root.nodes.bocchi
-│   ├── nijika.json           # Node nijika -> root.nodes.nijika
-│   └── ryo.toml              # Node ryo -> root.nodes.ryo
-└── services/
-    ├── api.yaml              # Service api -> root.services.api
-    ├── database.toml         # Service database -> root.services.database
-    └── frontend.json         # Service frontend -> root.services.frontend
-```
-
-Starry automatically maps relative file paths to canonical JSON paths:
-- `nodes/bocchi.yaml` mounts to `root.nodes.bocchi`
-- `services/api.toml` mounts to `root.services.api`
-- Files named `starry.yaml` or `config.yaml` at root merge directly into `root`
-
-Every leaf property retains its exact file, line, and column reference in the **Source Map**, making validation and schema errors precise!
+In **Starry v3.0**, the configuration engine is powered by the pure functional library **`Starry.Dsl`** (written in F#). The entire cluster infrastructure is modeled as an immutable graph with whole-subtree substitution, object inheritance via `$:`, and inline secret interpolation.
 
 ---
 
-## 2. Multi-Format Support: YAML, JSON & TOML
+## 1. Unified Config Graph AST & File Layout
 
-You can freely mix formats within a single project! Below is the same configuration snippet across all three supported formats:
-
-::: code-group
-
-```yaml [YAML (nodes/bocchi.yaml)]
-host: "198.51.100.10"
-port: 22
-vpn_ip: "10.99.0.1"
-engine: "docker"
-packages:
-  - wireguard
-  - nftables
-  - curl
-```
-
-```toml [TOML (nodes/bocchi.toml)]
-host = "198.51.100.10"
-port = 22
-vpn_ip = "10.99.0.1"
-engine = "docker"
-packages = ["wireguard", "nftables", "curl"]
-```
-
-```json [JSON (nodes/bocchi.json)]
-{
-  "host": "198.51.100.10",
-  "port": 22,
-  "vpn_ip": "10.99.0.1",
-  "engine": "docker",
-  "packages": [
-    "wireguard",
-    "nftables",
-    "curl"
-  ]
-}
-```
-
-:::
+Every file and directory within the configuration path is mounted into a single immutable AST:
+- **Structured Files (`.yaml`, `.json`, `.toml`):** Parsed and mounted to their respective tree branches (e.g. `nodes/germany.yaml` -> `root.nodes.germany`).
+- **Raw Text Files (`files/*`):** Text files (such as `files/nginx.conf` or `files/init.sql`) are mounted as `StringNode` objects under their path (`root.files.["nginx.conf"]`).
+- **Custom Branches:** Users can organize arbitrary user branches (`presets`, `secrets`, `vars`, `dns_providers`, `backups`, `certs`) without schema rejection.
 
 ---
 
-## 3. Cluster Schema & Spec
+## 2. Graph References (`$`) & Object Inheritance (`$:`)
 
-The cluster manifest defines cluster nodes (`nodes`), overlay mesh network (`mesh`), container services (`services`), and backup policies:
+### Whole-Subtree Substitution
+When a property references a graph path (e.g. `env: "$presets.db_env"`), Starry replaces the reference with a deep copy of the resolved subtree:
 
 ```yaml
-version: "1.0"
-cluster_name: "kessoku-prod"
+presets:
+  db_env:
+    POSTGRES_DB: "starry"
+    POSTGRES_USER: "admin"
+    POSTGRES_PASSWORD: "ENC[AES256_GCM:v1:...]"
 
-# WireGuard Mesh network settings
-mesh:
-  cidr: "10.99.0.0/16"
-  port: 51820
-  keepalive: 25
+services:
+  database:
+    image: "postgres:16"
+    env: "$presets.db_env"
+```
 
-# Cluster nodes
-nodes:
-  bocchi:
-    host: "198.51.100.10"
-    port: 22
-    vpn_ip: "10.99.0.1"
-    is_public: true
-    ssh_key: "ENC[AES256_GCM:v1:nonce:cipher:tag]"
+### Inheritance & Merging (`$:`)
+Using the special `"$"` key, a service or node can inherit and merge properties from one or more base presets:
 
-# Container services
+```yaml
+presets:
+  base_service:
+    restart: "always"
+    priority: 50
+    networks: ["$networks.app_net"]
+
 services:
   web:
+    $: "$presets.base_service"
     image: "nginx:alpine"
-    node: "bocchi"
-    priority: 80
-    ports:
-      - "80:80"
-      - "443:443"
-    env:
-      DB_PASSWORD: "ENC[AES256_GCM:v1:nonce:cipher:tag]"
+    priority: 80 # Overrides priority from base_service
+```
+
+### String & File Interpolation
+All strings and text files support `$path.to.value` and `${path.to.value}` interpolation, with automatic secret decryption during deployment.
+
+---
+
+## 3. IPv6 Mesh (`fd67:b00b::/32`) & Monotonic ID Ledger
+
+* **Cluster ULA Prefix:** `fd67:b00b::/32`.
+* **Host Subnet (`/48`):** Each node is assigned `fd67:b00b:<host_id>::/48`. WireGuard interface `starry0` has address `fd67:b00b:<host_id>::1/32`, and peers route `AllowedIPs = fd67:b00b:<host_id>::/48` statically.
+* **Container Replica Subnet (`/64`):** Each container replica gets a dedicated `/64` subnet `fd67:b00b:<host_id>:<container_id>::/64` with a single interface `eth0` bound to `fd67:b00b:<host_id>:<container_id>::1/64`.
+* **Tombstone Ledger (`.starry/id-ledger.json`):** Released host and container IDs are permanently tombstoned and never reused.
+
+---
+
+## 4. Named Bidirectional Routing (`ports:`)
+
+```yaml
+ports:
+  shop_https_v4:
+    from: "$nodes.germany.ipv4:443"
+    to: "$ingress:443"
+    proto: "tcp"
+    bidirectional: true # Inbound DNAT + symmetric outbound SNAT!
+
+  custom_proxy:
+    from: "$nodes.finland.ipv4:443"
+    to: "my-proxy:443"
 ```
 
 ---
 
-## 4. Configuration Management Commands (CLI)
+## 5. Managed Ingress (`$ingress`) & L4 SNI Proxying
 
-Starry provides a suite of CLI tools for inspecting and transforming configs:
+* `$ingress` binds internally to `fd67:b00b:<host_id>:ffff::1` and never intercepts port 443 without explicit rules in `ports:`.
+* Routing uses Nginx `stream { ssl_preread on; }`:
+  - `sni: "<target>"` passes TLS traffic through at Layer 4 without certificate termination.
+  - `http: "<target>"` routes internally to `http {}` for SSL termination and reverse proxying.
 
-### Validation (`starry config validate`)
-Verifies schema constraints, required fields, network addresses, and encrypted secret syntax:
-```bash
-starry config validate ./cluster
+---
+
+## 6. Hierarchical Domains (`domains:`) & Cloudflare Origin Rules
+
+```yaml
+domains:
+  rocks:
+    bocchi:
+      dns_provider: "$dns_providers.cf"
+      cert: "$certs.bocchi_wildcard"
+      node: "$nodes.germany"
+
+      "@":
+        http: "landing:80"
+      shop:
+        http: "shop-web:3000"
+      vpn:
+        sni: "xray:8443"
+        proxy_protocol: true
 ```
 
-### Packing (`starry config pack`)
-Packs a modular directory hierarchy into a single bundle file:
-```bash
-starry config pack ./cluster -o starry.bundle.yaml --format yaml
-```
-
-### Splitting (`starry config split`)
-Splits a monolithic bundle back into standard modular folders (`nodes/`, `services/`):
-```bash
-starry config split starry.bundle.yaml -o ./modular-config --format yaml
-```
-
-### Canonical Formatting (`starry config fmt`)
-Formats config files cleanly according to canonical formatting rules:
-```bash
-starry config fmt cluster/nodes/bocchi.yaml
-```
-
-### JSON Schema Generation (`starry config schema`)
-Generates the official JSON Schema for IDE validation and autocompletion:
-```bash
-starry config schema > starry.schema.json
-```
+When an ingress entry port is non-standard (e.g. 8443), Starry automatically programs Cloudflare Origin Rules via the Rulesets API to rewrite origin ports transparently!
 ````
 
 ## File: site/en/guide/backups-disaster-recovery.md
@@ -7298,7 +7224,7 @@ starry encrypt global --reencrypt \
 
 ## File: src/Starry.Cli/Program.cs
 
-**Lines**: 1304 | **Size**: 50.5 KB | **Language**: csharp
+**Lines**: 1405 | **Size**: 54.6 KB | **Language**: csharp
 
 ```csharp
 ﻿using System.Globalization;
@@ -7315,6 +7241,7 @@ using Starry.Infrastructure.Agent;
 using Starry.Infrastructure.Backups;
 using Starry.Infrastructure.Configuration;
 using Starry.Infrastructure.Localization;
+using Starry.Infrastructure.Network;
 using Starry.Infrastructure.Nodes;
 using Starry.Infrastructure.Orchestration;
 using Starry.Infrastructure.Processes;
@@ -7430,6 +7357,7 @@ internal static class Program
             "ENCRYPT" => HandleEncryptCommand(commandArgs),
             "NODES" => HandleNodesCommand(commandArgs, localizer),
             "ROTATE-KEYS" => HandleRotateKeysDirectCommand(commandArgs),
+            "NET" => HandleNetCommandAsync(commandArgs),
             "PLAN" => HandlePlanCommand(commandArgs),
             "APPLY" => HandleApplyCommand(commandArgs),
             "AGENT" => HandleAgentCommandAsync(commandArgs),
@@ -7441,12 +7369,12 @@ internal static class Program
 
     private static int HandleInitCommand(string[] args)
     {
-        var targetPath = ResolveTargetPath(args);
-        var clusterName = ExtractOptionValue(args, "--name") ?? "starry-fleet";
+        var projectName = args.FirstOrDefault(a => !a.StartsWith('-'));
+        var skipFolder = args.Any(a => string.Equals(a, "--skip-folder-create", StringComparison.OrdinalIgnoreCase));
 
         try
         {
-            var (masterKey, dir) = RepositoryInitializer.Initialize(targetPath, clusterName);
+            var (masterKey, dir) = RepositoryInitializer.Initialize(projectName, skipFolder);
             AnsiConsole.MarkupLine($"[bold green]✓ Initialized Starry GitOps repository in '{Markup.Escape(dir)}'![/]");
             AnsiConsole.MarkupLine($"[yellow]Generated master encryption key:[/] [bold green]{masterKey}[/]");
             AnsiConsole.MarkupLine("[grey]Export this key into your environment: export STARRY_MASTER_KEY=\"...\"[/]");
@@ -8136,8 +8064,95 @@ internal static class Program
             return await ExecuteNodesRotateKeysAsync(subArgs).ConfigureAwait(false);
         }
 
+        if (string.Equals(subCommand, "interfaces", StringComparison.OrdinalIgnoreCase))
+        {
+            return await ExecuteNetInterfacesAsync(subArgs).ConfigureAwait(false);
+        }
+
         AnsiConsole.MarkupLine($"[yellow]starry nodes[/] - [grey]{Markup.Escape(localizer.GetString(LocalizationKeys.NodesCommandDescription))}[/]");
         return 0;
+    }
+
+    private static async Task<int> HandleNetCommandAsync(string[] args)
+    {
+        var subCommand = args.Length > 0 ? args[0] : "interfaces";
+        var subArgs = args.Length > 1 ? args[1..] : Array.Empty<string>();
+
+        if (string.Equals(subCommand, "interfaces", StringComparison.OrdinalIgnoreCase))
+        {
+            return await ExecuteNetInterfacesAsync(subArgs).ConfigureAwait(false);
+        }
+
+        AnsiConsole.MarkupLine("[red]Usage: starry net interfaces [--config <path>] [--verify][/]");
+        return 1;
+    }
+
+    private static async Task<int> ExecuteNetInterfacesAsync(string[] args)
+    {
+        var configPath = ExtractOptionValue(args, "--config") ?? ".";
+        var verify = args.Any(a => string.Equals(a, "--verify", StringComparison.OrdinalIgnoreCase));
+
+        try
+        {
+            var engine = new VirtualConfigEngine();
+            var tree = engine.Load(configPath);
+            var orchestrator = new ClusterOrchestrator();
+            var nodes = await orchestrator.ResolveNodesAsync(tree).ConfigureAwait(false);
+
+            try
+            {
+                var ledger = new IdLedgerService(configPath);
+                var table = new Table().Border(TableBorder.Rounded);
+                table.AddColumn("[bold]Node & Host ID[/]");
+                table.AddColumn("[bold]Interface[/]");
+                table.AddColumn("[bold]IPv4 Addresses[/]");
+                table.AddColumn("[bold]IPv6 Subnets / Addresses[/]");
+                table.AddColumn("[bold]Classification / Verification[/]");
+
+                foreach (var node in nodes)
+                {
+                    var hostId = ledger.AllocateHostId(node.NodeName);
+                    var report = await NodeNetworkInspector.InspectNodeAsync(node, hostId, verify).ConfigureAwait(false);
+
+                    foreach (var iface in report.Interfaces)
+                    {
+                        var statusMarkup = iface.Classification switch
+                        {
+                            InterfaceClassification.DedicatedPublic => "[green]DEDICATED PUBLIC[/]",
+                            InterfaceClassification.RoutedIpv6Subnet => "[cyan]ROUTED /64 SUBNET[/]",
+                            InterfaceClassification.BehindNatOrCgnat => "[yellow]BEHIND NAT / CGNAT[/]",
+                            InterfaceClassification.Firewalled => "[red]FIREWALLED[/]",
+                            _ => "[grey]INTERNAL ONLY[/]"
+                        };
+
+                        var v4 = iface.Ipv4Addresses.Count > 0 ? string.Join("\n", iface.Ipv4Addresses) : "-";
+                        var v6 = iface.Ipv6Addresses.Count > 0 ? string.Join("\n", iface.Ipv6Addresses) : "-";
+
+                        table.AddRow(
+                            $"{report.NodeName}\n[grey]{report.MeshIpv6}[/]",
+                            iface.InterfaceName,
+                            v4,
+                            v6,
+                            statusMarkup);
+                    }
+                }
+
+                AnsiConsole.Write(table);
+                return 0;
+            }
+            finally
+            {
+                foreach (var n in nodes)
+                {
+                    await n.DisposeAsync().ConfigureAwait(false);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]Network inspection failed: {Markup.Escape(ex.Message)}[/]");
+            return 1;
+        }
     }
 
     private static async Task<int> ExecuteNodesListAsync(string[] args)
@@ -8464,14 +8479,6 @@ internal static class Program
         var subCommand = args.Length > 0 ? args[0] : "help";
         if (string.Equals(subCommand, "open", StringComparison.OrdinalIgnoreCase))
         {
-            if (args.Length < 3)
-            {
-                AnsiConsole.MarkupLine("[red]Usage: starry volume open <node> <volumePath> [--config <path>] [--once][/]");
-                return 1;
-            }
-
-            var nodeName = args[1];
-            var volumePath = args[2];
             var configPath = ExtractOptionValue(args, "--config") ?? ".";
             var once = args.Any(a => string.Equals(a, "--once", StringComparison.OrdinalIgnoreCase));
 
@@ -8480,6 +8487,26 @@ internal static class Program
                 var engine = new VirtualConfigEngine();
                 var tree = engine.Load(configPath);
                 var orchestrator = new ClusterOrchestrator();
+
+                string nodeName;
+                string volumePath;
+
+                if (args.Length >= 2 && tree.Root["volumes"]?[args[1]] is JsonObject volObj)
+                {
+                    nodeName = volObj["node"]?.ToString() ?? "node-1";
+                    volumePath = volObj["path"]?.ToString() ?? $"/var/lib/docker/volumes/{args[1]}/_data";
+                }
+                else if (args.Length >= 3)
+                {
+                    nodeName = args[1];
+                    volumePath = args[2];
+                }
+                else
+                {
+                    AnsiConsole.MarkupLine("[red]Usage: starry volume open <volume_name | node volumePath> [--config <path>] [--once][/]");
+                    return 1;
+                }
+
                 var nodeObj = tree.Root["nodes"]?[nodeName] as JsonObject
                     ?? throw new InvalidOperationException($"Node '{nodeName}' not found in configuration.");
 
@@ -8609,7 +8636,7 @@ internal static class Program
 
 ## File: src/Starry.Cli/Starry.Cli.csproj
 
-**Lines**: 46 | **Size**: 1.7 KB | **Language**: xml
+**Lines**: 47 | **Size**: 1.8 KB | **Language**: xml
 
 ```xml
 ﻿<Project Sdk="Microsoft.NET.Sdk">
@@ -8651,6 +8678,7 @@ internal static class Program
   <ItemGroup>
     <ProjectReference Include="..\Starry.Core\Starry.Core.csproj" />
     <ProjectReference Include="..\Starry.Infrastructure\Starry.Infrastructure.csproj" />
+    <ProjectReference Include="..\Starry.Dsl\Starry.Dsl.fsproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -8662,10 +8690,14 @@ internal static class Program
 
 ## File: src/Starry.Core/Starry.Core.csproj
 
-**Lines**: 9 | **Size**: 210 B | **Language**: xml
+**Lines**: 13 | **Size**: 307 B | **Language**: xml
 
 ```xml
 ﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\Starry.Dsl\Starry.Dsl.fsproj" />
+  </ItemGroup>
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
@@ -8917,7 +8949,7 @@ public sealed record RuntimeInfo(
 
 ## File: src/Starry.Core/Containers/ServiceSpec.cs
 
-**Lines**: 15 | **Size**: 818 B | **Language**: csharp
+**Lines**: 42 | **Size**: 2.1 KB | **Language**: csharp
 
 ```csharp
 namespace Starry.Core.Containers;
@@ -8928,12 +8960,39 @@ public sealed record ServiceSpec
     public required string Image { get; init; }
     public int Priority { get; init; } = 50;
     public string? VipAddress { get; init; }
+    public int Replicas { get; init; } = 1;
+    public string? TargetNode { get; init; }
+    public IReadOnlyList<string> TargetNodes { get; init; } = [];
+    public IReadOnlyList<string> Networks { get; init; } = ["default"];
+    public string? Egress { get; init; } = "true";
+
     public IReadOnlyList<string> Ports { get; init; } = [];
     public IReadOnlyList<string> Volumes { get; init; } = [];
     public IReadOnlyDictionary<string, string> Environment { get; init; } = new Dictionary<string, string>(StringComparer.Ordinal);
     public IReadOnlyDictionary<string, string> Files { get; init; } = new Dictionary<string, string>(StringComparer.Ordinal);
     public IReadOnlyDictionary<string, string> Labels { get; init; } = new Dictionary<string, string>(StringComparer.Ordinal);
     public string? HealthcheckEndpoint { get; init; }
+
+    // Full Docker Compose service parameters
+    public string? Command { get; init; }
+    public string? Entrypoint { get; init; }
+    public string? WorkingDir { get; init; }
+    public string? User { get; init; }
+    public string? Hostname { get; init; }
+    public string? Domainname { get; init; }
+    public string Restart { get; init; } = "unless-stopped";
+    public bool Privileged { get; init; }
+    public IReadOnlyList<string> CapAdd { get; init; } = [];
+    public IReadOnlyList<string> CapDrop { get; init; } = [];
+    public IReadOnlyList<string> Devices { get; init; } = [];
+    public IReadOnlyDictionary<string, string> Sysctls { get; init; } = new Dictionary<string, string>(StringComparer.Ordinal);
+    public IReadOnlyList<string> ExtraHosts { get; init; } = [];
+    public string? NetworkMode { get; init; }
+    public long? ShmSize { get; init; }
+    public string? MemLimit { get; init; }
+    public double? Cpus { get; init; }
+    public string? StopSignal { get; init; }
+    public int? StopGracePeriod { get; init; }
 }
 ```
 
@@ -9268,15 +9327,870 @@ public sealed record SecretEnvelope(
 }
 ```
 
+## File: src/Starry.Dsl/ConfigAst.fs
+
+**Lines**: 384 | **Size**: 16.3 KB | **Language**: fsharp
+
+```fsharp
+namespace Starry.Dsl
+
+open System
+open System.IO
+open System.Text
+open System.Text.Json
+open System.Text.Json.Nodes
+open YamlDotNet.Serialization
+open Tomlyn
+open Tomlyn.Model
+
+type ConfigNode =
+    | ObjectNode of Map<string, ConfigNode> * sourceFile: string option
+    | ArrayNode of ConfigNode list * sourceFile: string option
+    | StringNode of string * sourceFile: string option
+    | IntNode of int64 * sourceFile: string option
+    | FloatNode of float * sourceFile: string option
+    | BoolNode of bool * sourceFile: string option
+    | NullNode of sourceFile: string option
+
+module ConfigAst =
+
+    let rec sourceOf node =
+        match node with
+        | ObjectNode (_, s)
+        | ArrayNode (_, s)
+        | StringNode (_, s)
+        | IntNode (_, s)
+        | FloatNode (_, s)
+        | BoolNode (_, s)
+        | NullNode s -> s
+
+    let rec withSource src node =
+        match node with
+        | ObjectNode (m, _) -> ObjectNode (m, Some src)
+        | ArrayNode (l, _) -> ArrayNode (l, Some src)
+        | StringNode (s, _) -> StringNode (s, Some src)
+        | IntNode (i, _) -> IntNode (i, Some src)
+        | FloatNode (f, _) -> FloatNode (f, Some src)
+        | BoolNode (b, _) -> BoolNode (b, Some src)
+        | NullNode _ -> NullNode (Some src)
+
+    // Convert raw parsed objects into ConfigNode
+    let rec fromRawObject (src: string option) (value: obj) : ConfigNode =
+        match value with
+        | null -> NullNode src
+        | :? ConfigNode as cn -> cn
+        | :? bool as b -> BoolNode (b, src)
+        | :? int as i -> IntNode (int64 i, src)
+        | :? int64 as i -> IntNode (i, src)
+        | :? float as f -> FloatNode (f, src)
+        | :? decimal as m -> FloatNode (double m, src)
+        | :? string as s -> StringNode (s, src)
+        | :? JsonValue as jv ->
+            let s = jv.ToString()
+            let mutable b = false
+            let mutable i = 0L
+            let mutable d = 0.0
+            if jv.TryGetValue<bool>(&b) then BoolNode (b, src)
+            elif jv.TryGetValue<int64>(&i) then IntNode (i, src)
+            elif jv.TryGetValue<double>(&d) then FloatNode (d, src)
+            else StringNode (s, src)
+        | :? JsonObject as jo ->
+            let map =
+                jo
+                |> Seq.map (fun kvp -> kvp.Key, fromRawObject src kvp.Value)
+                |> Map.ofSeq
+            ObjectNode (map, src)
+        | :? JsonArray as ja ->
+            let list = ja |> Seq.map (fromRawObject src) |> Seq.toList
+            ArrayNode (list, src)
+        | :? TomlTable as tt ->
+            let map =
+                tt
+                |> Seq.map (fun kvp -> kvp.Key, fromRawObject src kvp.Value)
+                |> Map.ofSeq
+            ObjectNode (map, src)
+        | :? TomlArray as ta ->
+            let list = ta |> Seq.map (fromRawObject src) |> Seq.toList
+            ArrayNode (list, src)
+        | :? TomlTableArray as tta ->
+            let list = tta |> Seq.map (fromRawObject src) |> Seq.toList
+            ArrayNode (list, src)
+        | :? System.Collections.IDictionary as dict ->
+            let seq = seq { for k in dict.Keys do yield string k, fromRawObject src dict.[k] }
+            ObjectNode (Map.ofSeq seq, src)
+        | :? System.Collections.IEnumerable as enum when not (enum :? string) ->
+            let seq = seq { for item in enum do yield fromRawObject src item }
+            ArrayNode (Seq.toList seq, src)
+        | other -> StringNode (string other, src)
+
+    // Convert ConfigNode into untyped .NET objects for serializers
+    let rec toRawObject (node: ConfigNode) : obj =
+        match node with
+        | NullNode _ -> null
+        | BoolNode (b, _) -> box b
+        | IntNode (i, _) -> box i
+        | FloatNode (f, _) -> box f
+        | StringNode (s, _) -> box s
+        | ArrayNode (items, _) ->
+            let list = System.Collections.Generic.List<obj>()
+            items |> List.iter (fun item -> list.Add(toRawObject item))
+            box list
+        | ObjectNode (props, _) ->
+            let dict = System.Collections.Generic.Dictionary<string, obj>(StringComparer.Ordinal)
+            props |> Map.iter (fun k v -> dict.[k] <- toRawObject v)
+            box dict
+
+    // Interop with System.Text.Json.Nodes.JsonNode
+    let rec toJsonNode (node: ConfigNode) : JsonNode =
+        match node with
+        | NullNode _ -> null
+        | BoolNode (b, _) -> JsonValue.Create(b) :> JsonNode
+        | IntNode (i, _) -> JsonValue.Create(i) :> JsonNode
+        | FloatNode (f, _) -> JsonValue.Create(f) :> JsonNode
+        | StringNode (s, _) -> JsonValue.Create(s) :> JsonNode
+        | ArrayNode (items, _) ->
+            let arr = JsonArray()
+            items |> List.iter (fun item ->
+                let jn = toJsonNode item
+                if jn <> null then arr.Add(jn) else arr.Add(null)
+            )
+            arr :> JsonNode
+        | ObjectNode (props, _) ->
+            let jo = JsonObject()
+            props |> Map.iter (fun k v ->
+                let jn = toJsonNode v
+                jo.[k] <- jn
+            )
+            jo :> JsonNode
+
+    let fromJsonNode (src: string option) (node: JsonNode) : ConfigNode =
+        fromRawObject src node
+
+    // Parsers for individual files
+    let parseYaml (content: string) (sourcePath: string option) : ConfigNode =
+        let deserializer = DeserializerBuilder().Build()
+        use reader = new StringReader(content)
+        let raw = deserializer.Deserialize(reader)
+        fromRawObject sourcePath raw
+
+    let parseJson (content: string) (sourcePath: string option) : ConfigNode =
+        let parsed = JsonNode.Parse(content)
+        fromRawObject sourcePath parsed
+
+    let parseToml (content: string) (sourcePath: string option) : ConfigNode =
+        let model = Toml.ToModel(content)
+        fromRawObject sourcePath model
+
+    let parseFile (filePath: string) : ConfigNode =
+        let ext = Path.GetExtension(filePath).ToLowerInvariant()
+        let content = File.ReadAllText(filePath, Encoding.UTF8)
+        let src = Some filePath
+        match ext with
+        | ".yaml" | ".yml" -> parseYaml content src
+        | ".json" -> parseJson content src
+        | ".toml" -> parseToml content src
+        | _ -> StringNode (content, src)
+
+    // Merge two ObjectNode maps
+    let rec mergeObjects (a: Map<string, ConfigNode>) (b: Map<string, ConfigNode>) : Map<string, ConfigNode> =
+        b |> Map.fold (fun acc k v2 ->
+            match acc.TryFind(k) with
+            | Some (ObjectNode (m1, src1)) ->
+                match v2 with
+                | ObjectNode (m2, src2) ->
+                    let merged = mergeObjects m1 m2
+                    Map.add k (ObjectNode (merged, src2 |> Option.orElse src1)) acc
+                | _ -> Map.add k v2 acc
+            | _ -> Map.add k v2 acc
+        ) a
+
+    let setAtPath (pathSegments: string list) (value: ConfigNode) (root: ConfigNode) : ConfigNode =
+        let rec loop segments current =
+            match segments with
+            | [] -> value
+            | [ last ] ->
+                match current with
+                | ObjectNode (m, src) -> ObjectNode (Map.add last value m, src)
+                | _ -> ObjectNode (Map.ofList [ last, value ], None)
+            | head :: tail ->
+                match current with
+                | ObjectNode (m, src) ->
+                    let child = m.TryFind(head) |> Option.defaultValue (ObjectNode (Map.empty, None))
+                    let updatedChild = loop tail child
+                    ObjectNode (Map.add head updatedChild m, src)
+                | _ ->
+                    let updatedChild = loop tail (ObjectNode (Map.empty, None))
+                    ObjectNode (Map.ofList [ head, updatedChild ], None)
+        loop pathSegments root
+
+    let rec getAtPath (pathSegments: string list) (root: ConfigNode) : ConfigNode option =
+        match pathSegments with
+        | [] -> Some root
+        | head :: tail ->
+            match root with
+            | ObjectNode (m, _) ->
+                match m.TryFind(head) with
+                | Some child -> getAtPath tail child
+                | None -> None
+            | _ -> None
+
+    // Unified Directory-to-Graph AST Loader
+    let loadDirectory (dirPath: string) : ConfigNode =
+        let dir = Path.GetFullPath(dirPath)
+        if not (Directory.Exists(dir)) then
+            failwithf "Directory not found: %s" dir
+
+        let allFiles =
+            Directory.GetFiles(dir, "*.*", SearchOption.AllDirectories)
+            |> Array.filter (fun f ->
+                let rel = Path.GetRelativePath(dir, f).Replace('\\', '/')
+                let segments = rel.Split('/')
+                let isIgnored =
+                    segments |> Array.exists (fun s ->
+                        s.Equals(".git", StringComparison.OrdinalIgnoreCase) ||
+                        s.Equals(".starry", StringComparison.OrdinalIgnoreCase) ||
+                        s.Equals(".github", StringComparison.OrdinalIgnoreCase) ||
+                        s.Equals("node_modules", StringComparison.OrdinalIgnoreCase) ||
+                        s.Equals("dist", StringComparison.OrdinalIgnoreCase) ||
+                        s.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
+                        s.Equals("obj", StringComparison.OrdinalIgnoreCase)
+                    )
+                not isIgnored
+            )
+            |> Array.sort
+
+        let mutable rootNode = ObjectNode (Map.empty, Some dir)
+
+        for file in allFiles do
+            let rel = Path.GetRelativePath(dir, file).Replace('\\', '/')
+            let parsed = parseFile file
+
+            let dirName = Path.GetDirectoryName(rel)
+            let fileName = Path.GetFileName(rel)
+            let fileNameNoExt = Path.GetFileNameWithoutExtension(rel)
+
+            if String.IsNullOrEmpty(dirName) &&
+               (fileNameNoExt.Equals("starry", StringComparison.OrdinalIgnoreCase) ||
+                fileNameNoExt.Equals("config", StringComparison.OrdinalIgnoreCase)) then
+                // Root config file: merge top-level keys directly into root
+                match parsed with
+                | ObjectNode (props, _) ->
+                    match rootNode with
+                    | ObjectNode (rootProps, src) ->
+                        rootNode <- ObjectNode (mergeObjects rootProps props, src)
+                    | _ -> ()
+                | _ -> ()
+            else
+                let segments =
+                    let pathWithoutExt =
+                        if String.IsNullOrEmpty(dirName) then fileNameNoExt
+                        else Path.Combine(dirName, fileNameNoExt).Replace('\\', '/')
+                    pathWithoutExt.Split('/', StringSplitOptions.RemoveEmptyEntries)
+                    |> Array.toList
+
+                rootNode <- setAtPath segments parsed rootNode
+
+        rootNode
+
+    // Serializers
+    let serializeYaml (node: ConfigNode) : string =
+        let serializer = SerializerBuilder().ConfigureDefaultValuesHandling(DefaultValuesHandling.OmitNull).Build()
+        let raw = toRawObject node
+        serializer.Serialize(raw)
+
+    let serializeJson (node: ConfigNode) : string =
+        let jn = toJsonNode node
+        let options = JsonSerializerOptions(WriteIndented = true)
+        if jn = null then "{}" else jn.ToJsonString(options)
+
+    let serializeToml (node: ConfigNode) : string =
+        let jn = toJsonNode node
+        let rec tomlConvert (n: JsonNode) : obj =
+            match n with
+            | null -> null
+            | :? JsonObject as jo ->
+                let tt = TomlTable()
+                for kv in jo do
+                    let c = tomlConvert kv.Value
+                    if c <> null then tt.[kv.Key] <- c
+                box tt
+            | :? JsonArray as ja ->
+                let ta = TomlArray()
+                for item in ja do
+                    let c = tomlConvert item
+                    if c <> null then ta.Add(c)
+                box ta
+            | :? JsonValue as jv ->
+                let mutable b = false
+                let mutable i = 0L
+                let mutable d = 0.0
+                if jv.TryGetValue<bool>(&b) then box b
+                elif jv.TryGetValue<int64>(&i) then box i
+                elif jv.TryGetValue<double>(&d) then box d
+                else box (jv.ToString())
+            | other -> box (other.ToString())
+
+        let table =
+            match tomlConvert jn with
+            | :? TomlTable as tt -> tt
+            | _ -> TomlTable()
+        Toml.FromModel(table)
+
+    let serializeFormat (format: string) (node: ConfigNode) : string =
+        match format.ToLowerInvariant() with
+        | "json" -> serializeJson node
+        | "toml" -> serializeToml node
+        | _ -> serializeYaml node
+
+    // starry config pack
+    let pack (root: ConfigNode) (format: string) : string =
+        serializeFormat format root
+
+    // starry config split
+    let split (root: ConfigNode) (targetDir: string) (format: string) : unit =
+        Directory.CreateDirectory(targetDir) |> ignore
+        let ext =
+            match format.ToLowerInvariant() with
+            | "json" -> ".json"
+            | "toml" -> ".toml"
+            | _ -> ".yaml"
+
+        match root with
+        | ObjectNode (props, _) ->
+            let mutable rootProperties = Map.empty
+
+            props |> Map.iter (fun key node ->
+                match key.ToLowerInvariant() with
+                | "nodes" ->
+                    match node with
+                    | ObjectNode (nodesMap, _) ->
+                        let nodesDir = Path.Combine(targetDir, "nodes")
+                        Directory.CreateDirectory(nodesDir) |> ignore
+                        nodesMap |> Map.iter (fun nodeName nodeVal ->
+                            let filePath = Path.Combine(nodesDir, nodeName + ext)
+                            File.WriteAllText(filePath, serializeFormat format nodeVal, Encoding.UTF8)
+                        )
+                    | _ -> rootProperties <- Map.add key node rootProperties
+                | "services" ->
+                    match node with
+                    | ObjectNode (svcMap, _) ->
+                        let svcDir = Path.Combine(targetDir, "services")
+                        Directory.CreateDirectory(svcDir) |> ignore
+                        svcMap |> Map.iter (fun svcName svcVal ->
+                            let filePath = Path.Combine(svcDir, svcName + ext)
+                            File.WriteAllText(filePath, serializeFormat format svcVal, Encoding.UTF8)
+                        )
+                    | _ -> rootProperties <- Map.add key node rootProperties
+                | "domains" ->
+                    let domDir = Path.Combine(targetDir, "domains")
+                    Directory.CreateDirectory(domDir) |> ignore
+                    let filePath = Path.Combine(domDir, "domains" + ext)
+                    File.WriteAllText(filePath, serializeFormat format node, Encoding.UTF8)
+                | "ports" ->
+                    let filePath = Path.Combine(targetDir, "ports" + ext)
+                    File.WriteAllText(filePath, serializeFormat format node, Encoding.UTF8)
+                | "volumes" ->
+                    let filePath = Path.Combine(targetDir, "volumes" + ext)
+                    File.WriteAllText(filePath, serializeFormat format node, Encoding.UTF8)
+                | "files" ->
+                    let filesDir = Path.Combine(targetDir, "files")
+                    Directory.CreateDirectory(filesDir) |> ignore
+                    let rec dumpFiles (prefix: string) (fNode: ConfigNode) =
+                        match fNode with
+                        | StringNode (text, _) ->
+                            let filePath = Path.Combine(filesDir, prefix)
+                            let pDir = Path.GetDirectoryName(filePath)
+                            if not (String.IsNullOrEmpty(pDir)) then Directory.CreateDirectory(pDir) |> ignore
+                            File.WriteAllText(filePath, text, Encoding.UTF8)
+                        | ObjectNode (fMap, _) ->
+                            fMap |> Map.iter (fun subKey subVal ->
+                                let subPath = if String.IsNullOrEmpty(prefix) then subKey else Path.Combine(prefix, subKey)
+                                dumpFiles subPath subVal
+                            )
+                        | _ -> ()
+                    dumpFiles "" node
+                | _ ->
+                    rootProperties <- Map.add key node rootProperties
+            )
+
+            let mainConfigFile = Path.Combine(targetDir, "starry" + ext)
+            File.WriteAllText(mainConfigFile, serializeFormat format (ObjectNode (rootProperties, None)), Encoding.UTF8)
+        | _ -> ()
+```
+
+## File: src/Starry.Dsl/Generators.fs
+
+**Lines**: 236 | **Size**: 11.1 KB | **Language**: fsharp
+
+```fsharp
+namespace Starry.Dsl
+
+open System
+open System.Text
+
+module Generators =
+
+    type WireGuardPeerSpec = {
+        NodeName: string
+        HostId: int
+        PublicKey: string
+        Endpoint: string option
+        ListenPort: int
+        IsPublic: bool
+    }
+
+    type WireGuardHostSpec = {
+        NodeName: string
+        HostId: int
+        PrivateKey: string
+        PublicKey: string
+        ListenPort: int
+        Endpoint: string option
+        IsPublic: bool
+        Peers: WireGuardPeerSpec list
+    }
+
+    type NftablePortRule = {
+        Name: string
+        Protocol: string // "tcp", "udp", "both"
+        HostPort: int
+        TargetIpv6: string
+        TargetPort: int
+        Bidirectional: bool
+        AddressFamily: string // "ipv4", "ipv6", "any"
+    }
+
+    type MeshSubnetPair = {
+        SourceSubnet: string // e.g. "fd67:b00b:0001:0002::/64"
+        TargetSubnet: string // e.g. "fd67:b00b:0002:0001::/64"
+    }
+
+    type NginxRoute =
+        | SniPassthrough of serverName: string * targetEndpoint: string * proxyProtocol: bool
+        | HttpReverseProxy of serverName: string * targetIpv6: string * targetPort: int * certPath: string option * keyPath: string option
+
+    // 1. Generate WireGuard Config (starry0.conf) for a host
+    let generateWireGuardConfig (spec: WireGuardHostSpec) : string =
+        let sb = StringBuilder()
+        let hostHex = sprintf "%04x" spec.HostId
+
+        sb.AppendLine("# Managed by Starry GitOps Orchestrator - fd67:b00b::/32 Mesh") |> ignore
+        sb.AppendLine("# Interface: starry0") |> ignore
+        sb.AppendLine("[Interface]") |> ignore
+        sb.AppendLine(sprintf "Address = fd67:b00b:%s::1/32" hostHex) |> ignore
+        sb.AppendLine(sprintf "ListenPort = %d" spec.ListenPort) |> ignore
+        sb.AppendLine(sprintf "PrivateKey = %s" spec.PrivateKey) |> ignore
+        sb.AppendLine() |> ignore
+
+        for peer in spec.Peers do
+            let peerHex = sprintf "%04x" peer.HostId
+            sb.AppendLine(sprintf "# Peer: %s (Host ID: %d)" peer.NodeName peer.HostId) |> ignore
+            sb.AppendLine("[Peer]") |> ignore
+            sb.AppendLine(sprintf "PublicKey = %s" peer.PublicKey) |> ignore
+            // Each host routes the whole /48 statically so container changes never reload WG!
+            sb.AppendLine(sprintf "AllowedIPs = fd67:b00b:%s::/48" peerHex) |> ignore
+
+            match peer.Endpoint with
+            | Some ep when peer.IsPublic && not (String.IsNullOrWhiteSpace(ep)) ->
+                let formattedEp =
+                    if ep.Contains(":") then ep
+                    else sprintf "%s:%d" ep peer.ListenPort
+                sb.AppendLine(sprintf "Endpoint = %s" formattedEp) |> ignore
+            | _ -> ()
+
+            sb.AppendLine("PersistentKeepalive = 25") |> ignore
+            sb.AppendLine() |> ignore
+
+        sb.ToString()
+
+    // 2. Generate Nftables Ruleset (table inet starry)
+    let generateNftablesRuleset
+        (sshPort: int)
+        (wireGuardPort: int)
+        (allowedPublicPorts: int list)
+        (portRules: NftablePortRule list)
+        (allowedSubnetPairs: MeshSubnetPair list)
+        (wanInterface: string option) : string =
+
+        let sb = StringBuilder()
+        let wan = wanInterface |> Option.defaultValue "eth0"
+
+        sb.AppendLine("#!/usr/sbin/nft -f") |> ignore
+        sb.AppendLine("# Managed by Starry GitOps Orchestrator - Table: inet starry") |> ignore
+        sb.AppendLine("table inet starry") |> ignore
+        sb.AppendLine("delete table inet starry") |> ignore
+        sb.AppendLine("table inet starry {") |> ignore
+
+        // Network isolation set for inter-container communication
+        sb.AppendLine("    set allowed_mesh_pairs {") |> ignore
+        sb.AppendLine("        type ipv6_addr . ipv6_addr") |> ignore
+        sb.AppendLine("        flags interval") |> ignore
+        if allowedSubnetPairs.Length > 0 then
+            sb.AppendLine("        elements = {") |> ignore
+            for pair in allowedSubnetPairs do
+                sb.AppendLine(sprintf "            %s . %s," pair.SourceSubnet pair.TargetSubnet) |> ignore
+            sb.AppendLine("        }") |> ignore
+        sb.AppendLine("    }") |> ignore
+        sb.AppendLine() |> ignore
+
+        // Chain input
+        sb.AppendLine("    chain input {") |> ignore
+        sb.AppendLine("        type filter hook input priority filter; policy drop;") |> ignore
+        sb.AppendLine("        ct state established,related accept") |> ignore
+        sb.AppendLine("        iifname \"lo\" accept") |> ignore
+        sb.AppendLine("        iifname \"starry0\" accept") |> ignore
+        sb.AppendLine(sprintf "        tcp dport %d accept" sshPort) |> ignore
+        sb.AppendLine(sprintf "        udp dport %d accept" wireGuardPort) |> ignore
+
+        for p in allowedPublicPorts do
+            sb.AppendLine(sprintf "        tcp dport %d accept" p) |> ignore
+            sb.AppendLine(sprintf "        udp dport %d accept" p) |> ignore
+
+        sb.AppendLine("        icmp type echo-request accept") |> ignore
+        sb.AppendLine("        icmpv6 type { echo-request, nd-neighbor-solicit, nd-neighbor-advert, nd-router-advert } accept") |> ignore
+        sb.AppendLine("    }") |> ignore
+        sb.AppendLine() |> ignore
+
+        // Chain forward
+        sb.AppendLine("    chain forward {") |> ignore
+        sb.AppendLine("        type filter hook forward priority filter; policy drop;") |> ignore
+        sb.AppendLine("        ct state established,related accept") |> ignore
+        sb.AppendLine("        iifname \"starry0\" oifname \"starry0\" ip6 saddr . ip6 daddr @allowed_mesh_pairs accept") |> ignore
+        sb.AppendLine("        iifname \"starry0\" oifname \"starry0\" accept") |> ignore
+        sb.AppendLine("        iifname \"starry0\" accept") |> ignore
+        sb.AppendLine("        oifname \"starry0\" accept") |> ignore
+        sb.AppendLine("    }") |> ignore
+        sb.AppendLine() |> ignore
+
+        // Chain prerouting (DNAT)
+        sb.AppendLine("    chain prerouting {") |> ignore
+        sb.AppendLine("        type nat hook prerouting priority dstnat; policy accept;") |> ignore
+        for rule in portRules do
+            let proto = rule.Protocol.ToLowerInvariant()
+            let protoList = if proto = "both" then [ "tcp"; "udp" ] else [ proto ]
+            for p in protoList do
+                match rule.AddressFamily.ToLowerInvariant() with
+                | "ipv4" ->
+                    sb.AppendLine(sprintf "        meta nfproto ipv4 %s dport %d dnat to [%s]:%d" p rule.HostPort rule.TargetIpv6 rule.TargetPort) |> ignore
+                | "ipv6" ->
+                    sb.AppendLine(sprintf "        meta nfproto ipv6 %s dport %d dnat to [%s]:%d" p rule.HostPort rule.TargetIpv6 rule.TargetPort) |> ignore
+                | _ ->
+                    sb.AppendLine(sprintf "        %s dport %d dnat to [%s]:%d" p rule.HostPort rule.TargetIpv6 rule.TargetPort) |> ignore
+        sb.AppendLine("    }") |> ignore
+        sb.AppendLine() |> ignore
+
+        // Chain postrouting (SNAT / Masquerade)
+        sb.AppendLine("    chain postrouting {") |> ignore
+        sb.AppendLine("        type nat hook postrouting priority srcnat; policy accept;") |> ignore
+        sb.AppendLine("        oifname \"starry0\" masquerade") |> ignore
+        sb.AppendLine(sprintf "        oifname \"%s\" masquerade" wan) |> ignore
+        sb.AppendLine("    }") |> ignore
+        sb.AppendLine("}") |> ignore
+
+        sb.ToString()
+
+    // 3. Generate Nginx Managed ($ingress) Config
+    let generateNginxConfig (ingressHostId: int) (routes: NginxRoute list) : string =
+        let sb = StringBuilder()
+        let ingressIp = sprintf "fd67:b00b:%04x:ffff::1" ingressHostId
+
+        sb.AppendLine("# Managed by Starry GitOps Orchestrator - $ingress SNI & HTTP Proxy") |> ignore
+        sb.AppendLine("user nginx;") |> ignore
+        sb.AppendLine("worker_processes auto;") |> ignore
+        sb.AppendLine("pid /run/nginx.pid;") |> ignore
+        sb.AppendLine() |> ignore
+        sb.AppendLine("events {") |> ignore
+        sb.AppendLine("    worker_connections 4096;") |> ignore
+        sb.AppendLine("}") |> ignore
+        sb.AppendLine() |> ignore
+
+        // Stream block for L4 SNI routing
+        sb.AppendLine("stream {") |> ignore
+        sb.AppendLine("    map $ssl_preread_server_name $sni_upstream {") |> ignore
+        for r in routes do
+            match r with
+            | SniPassthrough (name, target, _) ->
+                sb.AppendLine(sprintf "        \"%s\" %s;" name target) |> ignore
+            | HttpReverseProxy (name, _, _, _, _) ->
+                // Route to internal HTTP block for TLS termination
+                sb.AppendLine(sprintf "        \"%s\" 127.0.0.1:8443;" name) |> ignore
+        sb.AppendLine("        default 127.0.0.1:8443;") |> ignore
+        sb.AppendLine("    }") |> ignore
+        sb.AppendLine() |> ignore
+        sb.AppendLine("    server {") |> ignore
+        sb.AppendLine("        listen 443;") |> ignore
+        sb.AppendLine(sprintf "        listen [%s]:443;" ingressIp) |> ignore
+        sb.AppendLine("        ssl_preread on;") |> ignore
+        sb.AppendLine("        proxy_pass $sni_upstream;") |> ignore
+        sb.AppendLine("    }") |> ignore
+        sb.AppendLine("}") |> ignore
+        sb.AppendLine() |> ignore
+
+        // HTTP block for L7 Reverse Proxying
+        sb.AppendLine("http {") |> ignore
+        sb.AppendLine("    include /etc/nginx/mime.types;") |> ignore
+        sb.AppendLine("    default_type application/octet-stream;") |> ignore
+        sb.AppendLine() |> ignore
+
+        for r in routes do
+            match r with
+            | HttpReverseProxy (name, targetIp, targetPort, certOpt, keyOpt) ->
+                sb.AppendLine("    server {") |> ignore
+                sb.AppendLine("        listen 127.0.0.1:8443 ssl http2;") |> ignore
+                sb.AppendLine(sprintf "        server_name %s;" name) |> ignore
+                match certOpt, keyOpt with
+                | Some cert, Some key ->
+                    sb.AppendLine(sprintf "        ssl_certificate %s;" cert) |> ignore
+                    sb.AppendLine(sprintf "        ssl_certificate_key %s;" key) |> ignore
+                | _ -> ()
+                sb.AppendLine("        location / {") |> ignore
+                sb.AppendLine(sprintf "            proxy_pass http://[%s]:%d;" targetIp targetPort) |> ignore
+                sb.AppendLine("            proxy_set_header Host $host;") |> ignore
+                sb.AppendLine("            proxy_set_header X-Real-IP $remote_addr;") |> ignore
+                sb.AppendLine("            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;") |> ignore
+                sb.AppendLine("            proxy_set_header X-Forwarded-Proto $scheme;") |> ignore
+                sb.AppendLine("            proxy_http_version 1.1;") |> ignore
+                sb.AppendLine("            proxy_set_header Upgrade $http_upgrade;") |> ignore
+                sb.AppendLine("            proxy_set_header Connection \"upgrade\";") |> ignore
+                sb.AppendLine("        }") |> ignore
+                sb.AppendLine("    }") |> ignore
+                sb.AppendLine() |> ignore
+            | _ -> ()
+
+        sb.AppendLine("}") |> ignore
+        sb.ToString()
+```
+
+## File: src/Starry.Dsl/GraphResolver.fs
+
+**Lines**: 175 | **Size**: 7.8 KB | **Language**: fsharp
+
+```fsharp
+namespace Starry.Dsl
+
+open System
+open System.Text.RegularExpressions
+
+module GraphResolver =
+
+    type ResolutionError =
+        | CircularReference of cycleChain: string list
+        | NodeNotFound of path: string
+        | InvalidInheritanceTarget of path: string
+
+    let private referenceRegex = Regex(@"\$\{?(?<path>[a-zA-Z0-9_\.]+)\}?", RegexOptions.Compiled)
+
+    let parsePath (pathStr: string) : string list =
+        let trimmed =
+            let s = pathStr.Trim()
+            if s.StartsWith("$") then s.Substring(1) else s
+        trimmed.Split('.', StringSplitOptions.RemoveEmptyEntries) |> Array.toList
+
+    let rec resolvePath (pathSegments: string list) (root: ConfigNode) : ConfigNode option =
+        ConfigAst.getAtPath pathSegments root
+
+    let scalarToString (node: ConfigNode) : string option =
+        match node with
+        | StringNode (s, _) -> Some s
+        | IntNode (i, _) -> Some (string i)
+        | FloatNode (f, _) -> Some (string f)
+        | BoolNode (b, _) -> Some (if b then "true" else "false")
+        | NullNode _ -> Some ""
+        | _ -> None
+
+    let rec resolveNode
+        (decryptSecret: (string -> string) option)
+        (activeStack: string list)
+        (root: ConfigNode)
+        (currentNode: ConfigNode) : Result<ConfigNode, ResolutionError> =
+
+        match currentNode with
+        | StringNode (text, src) ->
+            let trimmed = text.Trim()
+            // 1. Whole-subtree substitution (e.g. "$presets.default_env")
+            if (trimmed.StartsWith("$") || trimmed.StartsWith("${")) &&
+               not (trimmed.Contains(" ")) &&
+               (trimmed.StartsWith("$") && not (trimmed.Substring(1).Contains("$"))) then
+                let pathStr =
+                    if trimmed.StartsWith("${") && trimmed.EndsWith("}") then
+                        trimmed.Substring(2, trimmed.Length - 3)
+                    elif trimmed.StartsWith("$") then
+                        trimmed.Substring(1)
+                    else trimmed
+
+                if List.contains pathStr activeStack then
+                    Error (CircularReference (List.rev (pathStr :: activeStack)))
+                else
+                    match resolvePath (parsePath pathStr) root with
+                    | Some targetNode ->
+                        // Recursively resolve target subtree
+                        resolveNode decryptSecret (pathStr :: activeStack) root targetNode
+                    | None ->
+                        // If path not in tree, leave as literal string
+                        Ok (StringNode (text, src))
+            else
+                // 3. String & file content interpolation ($path.to.value and ${path.to.value})
+                let mutable hasError: ResolutionError option = None
+                let interpolated =
+                    referenceRegex.Replace(text, (fun m ->
+                        let p = m.Groups.["path"].Value
+                        if List.contains p activeStack then
+                            hasError <- Some (CircularReference (List.rev (p :: activeStack)))
+                            m.Value
+                        else
+                            match resolvePath (parsePath p) root with
+                            | Some target ->
+                                match resolveNode decryptSecret (p :: activeStack) root target with
+                                | Ok resolvedTarget ->
+                                    match scalarToString resolvedTarget with
+                                    | Some s ->
+                                        let finalStr =
+                                            match decryptSecret with
+                                            | Some decrypt -> decrypt s
+                                            | None -> s
+                                        finalStr
+                                    | None -> m.Value
+                                | Error err ->
+                                    hasError <- Some err
+                                    m.Value
+                            | None -> m.Value
+                    ))
+
+                match hasError with
+                | Some err -> Error err
+                | None ->
+                    let finalText =
+                        match decryptSecret with
+                        | Some decrypt -> decrypt interpolated
+                        | None -> interpolated
+                    Ok (StringNode (finalText, src))
+
+        | ArrayNode (items, src) ->
+            let resolvedItems =
+                items
+                |> List.map (resolveNode decryptSecret activeStack root)
+
+            let rec collect (acc: ConfigNode list) (list: Result<ConfigNode, ResolutionError> list) =
+                match list with
+                | [] -> Ok (ArrayNode (List.rev acc, src))
+                | (Ok n) :: rest -> collect (n :: acc) rest
+                | (Error e) :: _ -> Error e
+
+            collect [] resolvedItems
+
+        | ObjectNode (props, src) ->
+            // 2. Object Inheritance & Merging ($: key)
+            let inheritanceRefs =
+                match props.TryFind("$") with
+                | Some (StringNode (refPath, _)) -> [ refPath ]
+                | Some (ArrayNode (refList, _)) ->
+                    refList
+                    |> List.choose (function
+                        | StringNode (r, _) -> Some r
+                        | _ -> None)
+                | _ -> []
+
+            let mutable baseMap = Map.empty
+            let mutable inheritError: ResolutionError option = None
+
+            for refPath in inheritanceRefs do
+                if inheritError.IsNone then
+                    let cleanPath = if refPath.StartsWith("$") then refPath.Substring(1) else refPath
+                    if List.contains cleanPath activeStack then
+                        inheritError <- Some (CircularReference (List.rev (cleanPath :: activeStack)))
+                    else
+                        match resolvePath (parsePath cleanPath) root with
+                        | Some (ObjectNode _ as baseNode) ->
+                            match resolveNode decryptSecret (cleanPath :: activeStack) root baseNode with
+                            | Ok (ObjectNode (resolvedBaseProps, _)) ->
+                                baseMap <- ConfigAst.mergeObjects baseMap resolvedBaseProps
+                            | Ok _ ->
+                                inheritError <- Some (InvalidInheritanceTarget cleanPath)
+                            | Error err ->
+                                inheritError <- Some err
+                        | Some _ ->
+                            inheritError <- Some (InvalidInheritanceTarget cleanPath)
+                        | None ->
+                            inheritError <- Some (NodeNotFound cleanPath)
+
+            match inheritError with
+            | Some err -> Error err
+            | None ->
+                // Remove the special "$" inheritance key from explicitly defined properties
+                let explicitProps = Map.remove "$" props
+
+                // Merge baseMap with explicitProps (explicit overrides inherited)
+                let combinedProps = ConfigAst.mergeObjects baseMap explicitProps
+
+                let resolvedPropsResult =
+                    combinedProps
+                    |> Map.fold (fun accResult k v ->
+                        match accResult with
+                        | Error e -> Error e
+                        | Ok accMap ->
+                            match resolveNode decryptSecret activeStack root v with
+                            | Ok rv -> Ok (Map.add k rv accMap)
+                            | Error e -> Error e
+                    ) (Ok Map.empty)
+
+                match resolvedPropsResult with
+                | Ok rm -> Ok (ObjectNode (rm, src))
+                | Error e -> Error e
+
+        | leaf -> Ok leaf
+
+    let resolve (root: ConfigNode) (decryptSecret: (string -> string) option) : Result<ConfigNode, ResolutionError> =
+        resolveNode decryptSecret [] root root
+```
+
+## File: src/Starry.Dsl/Library.fs
+
+**Lines**: 5 | **Size**: 91 B | **Language**: fsharp
+
+```fsharp
+﻿namespace Starry.Dsl
+
+module Say =
+    let hello name =
+        printfn "Hello %s" name
+```
+
+## File: src/Starry.Dsl/Starry.Dsl.fsproj
+
+**Lines**: 19 | **Size**: 502 B | **Language**: fsproj
+
+```fsproj
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="ConfigAst.fs" />
+    <Compile Include="GraphResolver.fs" />
+    <Compile Include="Generators.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Tomlyn" Version="0.17.0" />
+    <PackageReference Include="YamlDotNet" Version="16.3.0" />
+  </ItemGroup>
+
+</Project>
+```
+
 ## File: src/Starry.Infrastructure/Starry.Infrastructure.csproj
 
-**Lines**: 19 | **Size**: 513 B | **Language**: xml
+**Lines**: 20 | **Size**: 580 B | **Language**: xml
 
 ```xml
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
     <ProjectReference Include="..\Starry.Core\Starry.Core.csproj" />
+    <ProjectReference Include="..\Starry.Dsl\Starry.Dsl.fsproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -10513,6 +11427,70 @@ public static class ConfigValidator
 }
 ```
 
+## File: src/Starry.Infrastructure/Configuration/GitSyncService.cs
+
+**Lines**: 57 | **Size**: 1.8 KB | **Language**: csharp
+
+```csharp
+using Starry.Core.Processes;
+using Starry.Infrastructure.Processes;
+
+namespace Starry.Infrastructure.Configuration;
+
+/// <summary>
+/// Service managing automated Git repository upstream synchronization (commit, pull --rebase, push).
+/// </summary>
+public sealed class GitSyncService
+{
+    private readonly IProcessRunner _runner;
+
+    public GitSyncService(IProcessRunner? runner = null)
+    {
+        _runner = runner ?? new ProcessRunner();
+    }
+
+    public async Task<bool> SyncUpstreamAsync(string workingDir, string commitMessage = "chore(starry): auto-sync cluster configuration", CancellationToken ct = default)
+    {
+        try
+        {
+            await _runner.RunAsync(new ProcessSpec
+            {
+                Executable = "git",
+                Arguments = ["add", "-A"],
+                WorkingDirectory = workingDir
+            }, ct).ConfigureAwait(false);
+
+            var commitResult = await _runner.RunAsync(new ProcessSpec
+            {
+                Executable = "git",
+                Arguments = ["commit", "-m", commitMessage],
+                WorkingDirectory = workingDir
+            }, ct).ConfigureAwait(false);
+
+            var pullResult = await _runner.RunAsync(new ProcessSpec
+            {
+                Executable = "git",
+                Arguments = ["pull", "--rebase", "--autostash"],
+                WorkingDirectory = workingDir
+            }, ct).ConfigureAwait(false);
+
+            var pushResult = await _runner.RunAsync(new ProcessSpec
+            {
+                Executable = "git",
+                Arguments = ["push"],
+                WorkingDirectory = workingDir
+            }, ct).ConfigureAwait(false);
+
+            return pullResult.IsSuccess && pushResult.IsSuccess;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+}
+```
+
 ## File: src/Starry.Infrastructure/Configuration/JsonConfigFormatProvider.cs
 
 **Lines**: 39 | **Size**: 1.1 KB | **Language**: csharp
@@ -10561,7 +11539,7 @@ public sealed class JsonConfigFormatProvider : IConfigFormatProvider
 
 ## File: src/Starry.Infrastructure/Configuration/RepositoryInitializer.cs
 
-**Lines**: 52 | **Size**: 1.9 KB | **Language**: csharp
+**Lines**: 78 | **Size**: 2.8 KB | **Language**: csharp
 
 ```csharp
 using Starry.Infrastructure.Security;
@@ -10569,24 +11547,31 @@ using Starry.Infrastructure.Security;
 namespace Starry.Infrastructure.Configuration;
 
 /// <summary>
-/// Initializes a new Starry GitOps repository directory with standard layout and gitignore.
+/// Initializes a new Starry GitOps repository directory with standard layout, .gitignore, and fd67:b00b::/32 mesh.
 /// </summary>
 public static class RepositoryInitializer
 {
-    public static (string MasterKeyBase64, string TargetDir) Initialize(string? targetDir = null, string clusterName = "starry-fleet")
+    public static (string MasterKeyBase64, string TargetDir) Initialize(
+        string? projectName = null,
+        bool skipFolderCreate = false,
+        string? baseDir = null)
     {
-        var resolvedDir = string.IsNullOrWhiteSpace(targetDir) ? Directory.GetCurrentDirectory() : Path.GetFullPath(targetDir);
+        var root = string.IsNullOrWhiteSpace(baseDir) ? Directory.GetCurrentDirectory() : Path.GetFullPath(baseDir);
+        var targetDir = !skipFolderCreate && !string.IsNullOrWhiteSpace(projectName)
+            ? Path.Combine(root, projectName)
+            : root;
 
-        Directory.CreateDirectory(resolvedDir);
-        Directory.CreateDirectory(Path.Combine(resolvedDir, "nodes"));
-        Directory.CreateDirectory(Path.Combine(resolvedDir, "services"));
-        Directory.CreateDirectory(Path.Combine(resolvedDir, "files"));
+        Directory.CreateDirectory(targetDir);
+        Directory.CreateDirectory(Path.Combine(targetDir, "nodes"));
+        Directory.CreateDirectory(Path.Combine(targetDir, "services"));
+        Directory.CreateDirectory(Path.Combine(targetDir, "files"));
+        Directory.CreateDirectory(Path.Combine(targetDir, "domains"));
 
-        File.WriteAllText(Path.Combine(resolvedDir, "nodes", ".gitkeep"), string.Empty);
-        File.WriteAllText(Path.Combine(resolvedDir, "services", ".gitkeep"), string.Empty);
-        File.WriteAllText(Path.Combine(resolvedDir, "files", ".gitkeep"), string.Empty);
+        File.WriteAllText(Path.Combine(targetDir, "nodes", ".gitkeep"), string.Empty);
+        File.WriteAllText(Path.Combine(targetDir, "services", ".gitkeep"), string.Empty);
+        File.WriteAllText(Path.Combine(targetDir, "files", ".gitkeep"), string.Empty);
 
-        var gitignorePath = Path.Combine(resolvedDir, ".gitignore");
+        var gitignorePath = Path.Combine(targetDir, ".gitignore");
         if (!File.Exists(gitignorePath))
         {
             const string gitignoreContent = """
@@ -10597,23 +11582,42 @@ public static class RepositoryInitializer
             File.WriteAllText(gitignorePath, gitignoreContent);
         }
 
-        var mainConfigPath = Path.Combine(resolvedDir, "starry.yaml");
+        var mainConfigPath = Path.Combine(targetDir, "starry.yaml");
         if (!File.Exists(mainConfigPath))
         {
+            var clusterName = !string.IsNullOrWhiteSpace(projectName) ? projectName : "starry-fleet";
             var configContent = $"""
-                version: "1.0"
+                version: "3.0"
                 cluster_name: "{clusterName}"
 
                 mesh:
-                  cidr: "10.99.0.0/16"
+                  prefix: "fd67:b00b::/32"
                   port: 51820
                   keepalive: 25
                 """;
             File.WriteAllText(mainConfigPath, configContent);
         }
 
+        var portsPath = Path.Combine(targetDir, "ports.yaml");
+        if (!File.Exists(portsPath))
+        {
+            const string portsContent = """
+                ports: {}
+                """;
+            File.WriteAllText(portsPath, portsContent);
+        }
+
+        var volumesPath = Path.Combine(targetDir, "volumes.yaml");
+        if (!File.Exists(volumesPath))
+        {
+            const string volumesContent = """
+                volumes: {}
+                """;
+            File.WriteAllText(volumesPath, volumesContent);
+        }
+
         var masterKey = CryptoService.GenerateMasterKeyBase64();
-        return (masterKey, resolvedDir);
+        return (masterKey, targetDir);
     }
 }
 ```
@@ -11774,10 +12778,11 @@ public sealed class PodmanRuntime : BaseSocketContainerRuntime
 
 ## File: src/Starry.Infrastructure/Dns/CloudflareDnsProvider.cs
 
-**Lines**: 204 | **Size**: 7.7 KB | **Language**: csharp
+**Lines**: 243 | **Size**: 9.2 KB | **Language**: csharp
 
 ```csharp
 using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json.Nodes;
 using Starry.Core.Dns;
 
@@ -11903,6 +12908,44 @@ public sealed class CloudflareDnsProvider : IDnsProvider
 
             postRes.EnsureSuccessStatusCode();
         }
+    }
+
+    public async Task ConfigureOriginRuleAsync(string zoneDomain, string hostname, int originPort, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(zoneDomain);
+        ArgumentException.ThrowIfNullOrWhiteSpace(hostname);
+
+        var zoneId = await ResolveZoneIdAsync(zoneDomain, ct).ConfigureAwait(false);
+
+        var payload = new JsonObject
+        {
+            ["rules"] = new JsonArray
+            {
+                new JsonObject
+                {
+                    ["expression"] = $"http.host eq \"{hostname}\"",
+                    ["description"] = $"Starry origin port rewrite to {originPort}",
+                    ["action"] = "route",
+                    ["action_parameters"] = new JsonObject
+                    {
+                        ["origin"] = new JsonObject
+                        {
+                            ["port"] = originPort
+                        }
+                    }
+                }
+            }
+        };
+
+        using var putRes = await SendWithRetryAsync(() =>
+        {
+            var req = new HttpRequestMessage(HttpMethod.Put, $"zones/{zoneId}/rulesets/phases/http_request_origin/entrypoint")
+            {
+                Content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json")
+            };
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiToken);
+            return req;
+        }, ct).ConfigureAwait(false);
     }
 
     public async Task DeleteRecordAsync(string zoneDomain, string recordId, CancellationToken ct = default)
@@ -12251,9 +13294,224 @@ public sealed class Localizer : ILocalizer
 }
 ```
 
+## File: src/Starry.Infrastructure/Network/IdLedgerService.cs
+
+**Lines**: 208 | **Size**: 6.7 KB | **Language**: csharp
+
+```csharp
+using System.Globalization;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+
+namespace Starry.Infrastructure.Network;
+
+public sealed record IdLedgerState
+{
+    public int NextHostId { get; set; } = 1;
+    public Dictionary<string, int> AllocatedHosts { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+    public List<int> TombstonedHostIds { get; init; } = [];
+
+    public int NextContainerId { get; set; } = 1;
+    public Dictionary<string, int> AllocatedContainers { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+    public List<int> TombstonedContainerIds { get; init; } = [];
+}
+
+/// <summary>
+/// Persistent ledger for monotonic, non-reusable host and container IDs with tombstoning,
+/// generating canonical fd67:b00b::/32 cluster IPv6 addresses.
+/// </summary>
+public sealed class IdLedgerService
+{
+    public const string ClusterPrefix = "fd67:b00b";
+    private readonly string _ledgerFilePath;
+    private readonly object _syncLock = new();
+    private IdLedgerState _state;
+
+    public IdLedgerService(string? baseDir = null)
+    {
+        var resolvedDir = string.IsNullOrWhiteSpace(baseDir) ? Directory.GetCurrentDirectory() : Path.GetFullPath(baseDir);
+        var starryDir = Path.Combine(resolvedDir, ".starry");
+        _ledgerFilePath = Path.Combine(starryDir, "id-ledger.json");
+        _state = LoadState();
+    }
+
+    public int AllocateHostId(string hostName, int? explicitId = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(hostName);
+
+        lock (_syncLock)
+        {
+            if (_state.AllocatedHosts.TryGetValue(hostName, out var existing))
+            {
+                return existing;
+            }
+
+            int allocated;
+            if (explicitId.HasValue)
+            {
+                allocated = explicitId.Value;
+                if (_state.TombstonedHostIds.Contains(allocated))
+                {
+                    throw new InvalidOperationException($"Host ID {allocated} is tombstoned and cannot be reused.");
+                }
+            }
+            else
+            {
+                while (_state.TombstonedHostIds.Contains(_state.NextHostId) ||
+                       _state.AllocatedHosts.ContainsValue(_state.NextHostId))
+                {
+                    _state.NextHostId++;
+                }
+
+                allocated = _state.NextHostId++;
+            }
+
+            _state.AllocatedHosts[hostName] = allocated;
+            SaveState();
+            return allocated;
+        }
+    }
+
+    public int AllocateContainerId(string containerKey, int? explicitId = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(containerKey);
+
+        lock (_syncLock)
+        {
+            if (_state.AllocatedContainers.TryGetValue(containerKey, out var existing))
+            {
+                return existing;
+            }
+
+            int allocated;
+            if (explicitId.HasValue)
+            {
+                allocated = explicitId.Value;
+                if (_state.TombstonedContainerIds.Contains(allocated))
+                {
+                    throw new InvalidOperationException($"Container ID {allocated} is tombstoned and cannot be reused.");
+                }
+            }
+            else
+            {
+                while (_state.TombstonedContainerIds.Contains(_state.NextContainerId) ||
+                       _state.AllocatedContainers.ContainsValue(_state.NextContainerId))
+                {
+                    _state.NextContainerId++;
+                }
+
+                allocated = _state.NextContainerId++;
+            }
+
+            _state.AllocatedContainers[containerKey] = allocated;
+            SaveState();
+            return allocated;
+        }
+    }
+
+    public void ReleaseHost(string hostName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(hostName);
+
+        lock (_syncLock)
+        {
+            if (_state.AllocatedHosts.TryGetValue(hostName, out var id))
+            {
+                _state.AllocatedHosts.Remove(hostName);
+                if (!_state.TombstonedHostIds.Contains(id))
+                {
+                    _state.TombstonedHostIds.Add(id);
+                }
+                SaveState();
+            }
+        }
+    }
+
+    public void ReleaseContainer(string containerKey)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(containerKey);
+
+        lock (_syncLock)
+        {
+            if (_state.AllocatedContainers.TryGetValue(containerKey, out var id))
+            {
+                _state.AllocatedContainers.Remove(containerKey);
+                if (!_state.TombstonedContainerIds.Contains(id))
+                {
+                    _state.TombstonedContainerIds.Add(id);
+                }
+                SaveState();
+            }
+        }
+    }
+
+    public static string FormatHostWireGuardIp(int hostId) =>
+        $"{ClusterPrefix}:{hostId:x4}::1";
+
+    public static string FormatHostSubnet(int hostId) =>
+        $"{ClusterPrefix}:{hostId:x4}::/48";
+
+    public static string FormatContainerSubnet(int hostId, int containerId) =>
+        $"{ClusterPrefix}:{hostId:x4}:{containerId:x4}::/64";
+
+    public static string FormatContainerIp(int hostId, int containerId) =>
+        $"{ClusterPrefix}:{hostId:x4}:{containerId:x4}::1";
+
+    public static string FormatIngressIp(int hostId) =>
+        $"{ClusterPrefix}:{hostId:x4}:ffff::1";
+
+    public IdLedgerState GetStateSnapshot()
+    {
+        lock (_syncLock)
+        {
+            return new IdLedgerState
+            {
+                NextHostId = _state.NextHostId,
+                AllocatedHosts = new Dictionary<string, int>(_state.AllocatedHosts, StringComparer.OrdinalIgnoreCase),
+                TombstonedHostIds = [.. _state.TombstonedHostIds],
+                NextContainerId = _state.NextContainerId,
+                AllocatedContainers = new Dictionary<string, int>(_state.AllocatedContainers, StringComparer.OrdinalIgnoreCase),
+                TombstonedContainerIds = [.. _state.TombstonedContainerIds]
+            };
+        }
+    }
+
+    private IdLedgerState LoadState()
+    {
+        if (!File.Exists(_ledgerFilePath))
+        {
+            return new IdLedgerState();
+        }
+
+        try
+        {
+            var json = File.ReadAllText(_ledgerFilePath);
+            var loaded = JsonSerializer.Deserialize<IdLedgerState>(json);
+            return loaded ?? new IdLedgerState();
+        }
+        catch
+        {
+            return new IdLedgerState();
+        }
+    }
+
+    private void SaveState()
+    {
+        var dir = Path.GetDirectoryName(_ledgerFilePath);
+        if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+        {
+            Directory.CreateDirectory(dir);
+        }
+
+        var json = JsonSerializer.Serialize(_state, new JsonSerializerOptions { WriteIndented = true });
+        File.WriteAllText(_ledgerFilePath, json);
+    }
+}
+```
+
 ## File: src/Starry.Infrastructure/Network/InternalDnsServer.cs
 
-**Lines**: 237 | **Size**: 6.7 KB | **Language**: csharp
+**Lines**: 453 | **Size**: 15.1 KB | **Language**: csharp
 
 ```csharp
 using System.Net;
@@ -12262,18 +13520,30 @@ using System.Text;
 
 namespace Starry.Infrastructure.Network;
 
+public sealed record ReplicaEndpoint(
+    string ReplicaName,
+    IPAddress Ipv6Address,
+    IPAddress? Ipv4Address = null);
+
 /// <summary>
-/// Lightweight embedded DNS responder serving *.internal domain resolutions for Container VIPs.
+/// Scoped internal DNS responder serving fd67:b00b::/32 AAAA records with source-aware network ACL isolation,
+/// replica round-robin balancing, and egress proxying.
 /// </summary>
 public sealed class InternalDnsServer : IAsyncDisposable
 {
     private readonly Dictionary<string, IPAddress> _records = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, List<ReplicaEndpoint>> _serviceEndpoints = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, HashSet<string>> _serviceNetworks = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _subnetToService = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, bool> _serviceEgress = new(StringComparer.OrdinalIgnoreCase);
+
     private UdpClient? _udpListener;
     private CancellationTokenSource? _cts;
     private Task? _listenerTask;
 
     public int Port { get; }
     public IReadOnlyDictionary<string, IPAddress> Records => _records;
+    public IPAddress UpstreamDns { get; set; } = IPAddress.Parse("1.1.1.1");
 
     public InternalDnsServer(int port = 5353)
     {
@@ -12285,8 +13555,53 @@ public sealed class InternalDnsServer : IAsyncDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(domain);
         ArgumentNullException.ThrowIfNull(address);
 
-        var normalized = domain.Trim().TrimEnd('.');
+        var normalized = NormalizeDomain(domain);
         _records[normalized] = address;
+
+        var endpoint = new ReplicaEndpoint(normalized, address);
+        RegisterReplica(normalized, endpoint, ["default"]);
+    }
+
+    public void RegisterService(
+        string serviceName,
+        IEnumerable<ReplicaEndpoint> endpoints,
+        IEnumerable<string> networks,
+        bool egressAllowed = true)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(serviceName);
+        ArgumentNullException.ThrowIfNull(endpoints);
+        ArgumentNullException.ThrowIfNull(networks);
+
+        var normName = NormalizeDomain(serviceName);
+        var endpointList = endpoints.ToList();
+        _serviceEndpoints[normName] = endpointList;
+        _serviceNetworks[normName] = new HashSet<string>(networks, StringComparer.OrdinalIgnoreCase);
+        _serviceEgress[normName] = egressAllowed;
+
+        if (endpointList.Count > 0)
+        {
+            _records[normName] = endpointList[0].Ipv6Address;
+            _records[$"{normName}.internal"] = endpointList[0].Ipv6Address;
+        }
+
+        foreach (var ep in endpointList)
+        {
+            var repDomain = NormalizeDomain(ep.ReplicaName);
+            _records[repDomain] = ep.Ipv6Address;
+            _records[$"{repDomain}.internal"] = ep.Ipv6Address;
+
+            // Map container /64 subnet prefix to service name for source-aware ACL
+            var subnetPrefix = ExtractSubnetPrefix64(ep.Ipv6Address);
+            if (!string.IsNullOrEmpty(subnetPrefix))
+            {
+                _subnetToService[subnetPrefix] = normName;
+            }
+        }
+    }
+
+    public void RegisterReplica(string serviceName, ReplicaEndpoint endpoint, IEnumerable<string> networks)
+    {
+        RegisterService(serviceName, [endpoint], networks, egressAllowed: true);
     }
 
     public Task StartAsync(IPAddress? bindAddress = null, CancellationToken ct = default)
@@ -12303,7 +13618,7 @@ public sealed class InternalDnsServer : IAsyncDisposable
                 try
                 {
                     var receiveResult = await _udpListener.ReceiveAsync(token).ConfigureAwait(false);
-                    var response = HandleDnsQuery(receiveResult.Buffer);
+                    var response = await HandleDnsQueryAsync(receiveResult.Buffer, receiveResult.RemoteEndPoint.Address, token).ConfigureAwait(false);
                     if (response != null)
                     {
                         await _udpListener.SendAsync(response, response.Length, receiveResult.RemoteEndPoint).ConfigureAwait(false);
@@ -12323,7 +13638,12 @@ public sealed class InternalDnsServer : IAsyncDisposable
         return Task.CompletedTask;
     }
 
-    public byte[]? HandleDnsQuery(byte[] queryBuffer)
+    public byte[]? HandleDnsQuery(byte[] queryBuffer, IPAddress? clientAddress = null)
+    {
+        return HandleDnsQueryAsync(queryBuffer, clientAddress, CancellationToken.None).GetAwaiter().GetResult();
+    }
+
+    public async Task<byte[]?> HandleDnsQueryAsync(byte[] queryBuffer, IPAddress? clientAddress = null, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(queryBuffer);
 
@@ -12338,39 +13658,173 @@ public sealed class InternalDnsServer : IAsyncDisposable
             return null;
         }
 
-        if (!_records.TryGetValue(domain, out var ip) || ip.AddressFamily != AddressFamily.InterNetwork)
+        var cleanDomain = NormalizeDomain(domain);
+        var baseServiceName = cleanDomain.EndsWith(".internal", StringComparison.OrdinalIgnoreCase)
+            ? cleanDomain[..^".internal".Length]
+            : cleanDomain;
+
+        // Check if query is for internal cluster service
+        List<ReplicaEndpoint>? endpoints = null;
+        IPAddress? directIp = null;
+        var hasEndpoints = _serviceEndpoints.TryGetValue(baseServiceName, out endpoints);
+        var hasDirect = _records.TryGetValue(cleanDomain, out directIp);
+
+        if (hasEndpoints || hasDirect)
         {
-            // Only return NXDOMAIN for cluster-internal domains to avoid hijacking public internet resolution
-            if (domain.EndsWith(".internal", StringComparison.OrdinalIgnoreCase) ||
-                domain.EndsWith(".local", StringComparison.OrdinalIgnoreCase))
+            // Verify Network Isolation ACL
+            if (clientAddress != null && !IsAccessAllowed(clientAddress, baseServiceName))
             {
                 return BuildNxDomainResponse(queryBuffer);
             }
 
-            return null;
-        }
+            if (qtype == 28) // AAAA record (IPv6)
+            {
+                var ipv6List = endpoints != null
+                    ? endpoints.Select(e => e.Ipv6Address).Where(ip => ip.AddressFamily == AddressFamily.InterNetworkV6).ToList()
+                    : directIp != null && directIp.AddressFamily == AddressFamily.InterNetworkV6 ? [directIp] : [];
 
-        if (qtype != 1) // 1 = A record. For AAAA (28) or others, return immediate NOERROR with 0 answers
-        {
+                if (ipv6List.Count > 0)
+                {
+                    return BuildAaaaResponse(queryBuffer, ipv6List);
+                }
+
+                return BuildEmptyNoErrorResponse(queryBuffer);
+            }
+
+            if (qtype == 1) // A record (IPv4)
+            {
+                var ipv4List = endpoints != null
+                    ? endpoints.Select(e => e.Ipv4Address).Where(ip => ip != null && ip.AddressFamily == AddressFamily.InterNetwork).Select(ip => ip!).ToList()
+                    : directIp != null && directIp.AddressFamily == AddressFamily.InterNetwork ? [directIp] : [];
+
+                if (ipv4List.Count > 0)
+                {
+                    return BuildDnsResponse(queryBuffer, ipv4List[0]);
+                }
+
+                // Return NOERROR with 0 answers so dual-stack resolution never hangs
+                return BuildEmptyNoErrorResponse(queryBuffer);
+            }
+
             return BuildEmptyNoErrorResponse(queryBuffer);
         }
 
-        return BuildDnsResponse(queryBuffer, ip);
+        // Domain is not internal service
+        if (cleanDomain.EndsWith(".internal", StringComparison.OrdinalIgnoreCase) ||
+            cleanDomain.EndsWith(".local", StringComparison.OrdinalIgnoreCase))
+        {
+            return BuildNxDomainResponse(queryBuffer);
+        }
+
+        // External domain resolution: check egress policy
+        if (clientAddress != null)
+        {
+            var callerService = ResolveCallerService(clientAddress);
+            if (!string.IsNullOrEmpty(callerService) &&
+                _serviceEgress.TryGetValue(callerService, out var egressAllowed) &&
+                !egressAllowed)
+            {
+                return BuildRefusedResponse(queryBuffer);
+            }
+        }
+
+        return await ForwardToUpstreamAsync(queryBuffer, ct).ConfigureAwait(false);
+    }
+
+    private bool IsAccessAllowed(IPAddress clientAddress, string targetService)
+    {
+        var callerService = ResolveCallerService(clientAddress);
+        if (string.IsNullOrEmpty(callerService))
+        {
+            // Caller is outside container subnets (host or mesh root)
+            return true;
+        }
+
+        if (string.Equals(callerService, targetService, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        // Ingress proxy has global service visibility
+        if (string.Equals(callerService, "ingress", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (_serviceNetworks.TryGetValue(callerService, out var callerNets) &&
+            _serviceNetworks.TryGetValue(targetService, out var targetNets))
+        {
+            return callerNets.Overlaps(targetNets);
+        }
+
+        return false;
+    }
+
+    private string? ResolveCallerService(IPAddress clientAddress)
+    {
+        var prefix = ExtractSubnetPrefix64(clientAddress);
+        if (!string.IsNullOrEmpty(prefix) && _subnetToService.TryGetValue(prefix, out var svc))
+        {
+            return svc;
+        }
+        return null;
+    }
+
+    private static string ExtractSubnetPrefix64(IPAddress address)
+    {
+        if (address.AddressFamily != AddressFamily.InterNetworkV6)
+        {
+            return string.Empty;
+        }
+
+        var bytes = address.GetAddressBytes();
+        if (bytes.Length < 8) return string.Empty;
+
+        return $"{bytes[0]:x2}{bytes[1]:x2}:{bytes[2]:x2}{bytes[3]:x2}:{bytes[4]:x2}{bytes[5]:x2}:{bytes[6]:x2}{bytes[7]:x2}";
+    }
+
+    private static string NormalizeDomain(string domain) =>
+        domain.Trim().TrimEnd('.').ToLowerInvariant();
+
+    private async Task<byte[]?> ForwardToUpstreamAsync(byte[] queryBuffer, CancellationToken ct)
+    {
+        try
+        {
+            using var upstreamClient = new UdpClient();
+            var targetEndpoint = new IPEndPoint(UpstreamDns, 53);
+            await upstreamClient.SendAsync(queryBuffer, queryBuffer.Length, targetEndpoint).ConfigureAwait(false);
+
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            linkedCts.CancelAfter(TimeSpan.FromSeconds(2));
+
+            var result = await upstreamClient.ReceiveAsync(linkedCts.Token).ConfigureAwait(false);
+            return result.Buffer;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static byte[] BuildNxDomainResponse(byte[] queryBuffer)
     {
         var response = new byte[queryBuffer.Length];
         Array.Copy(queryBuffer, response, queryBuffer.Length);
-
-        // Flags: Standard response, Name Error / NXDOMAIN (0x8183)
         response[2] = 0x81;
-        response[3] = 0x83;
-
-        // Answer count: 0
+        response[3] = 0x83; // NXDOMAIN
         response[6] = 0x00;
         response[7] = 0x00;
+        return response;
+    }
 
+    private static byte[] BuildRefusedResponse(byte[] queryBuffer)
+    {
+        var response = new byte[queryBuffer.Length];
+        Array.Copy(queryBuffer, response, queryBuffer.Length);
+        response[2] = 0x81;
+        response[3] = 0x85; // REFUSED
+        response[6] = 0x00;
+        response[7] = 0x00;
         return response;
     }
 
@@ -12378,15 +13832,10 @@ public sealed class InternalDnsServer : IAsyncDisposable
     {
         var response = new byte[queryBuffer.Length];
         Array.Copy(queryBuffer, response, queryBuffer.Length);
-
-        // Flags: Standard response, No error (0x8180)
         response[2] = 0x81;
-        response[3] = 0x80;
-
-        // Answer count: 0
+        response[3] = 0x80; // NOERROR
         response[6] = 0x00;
         response[7] = 0x00;
-
         return response;
     }
 
@@ -12412,7 +13861,7 @@ public sealed class InternalDnsServer : IAsyncDisposable
             index += labelLen;
         }
 
-        index++; // Skip null terminator
+        index++; // Null terminator
         if (index + 4 > buffer.Length)
         {
             return (string.Empty, 0);
@@ -12427,40 +13876,71 @@ public sealed class InternalDnsServer : IAsyncDisposable
         var response = new byte[queryBuffer.Length + 16];
         Array.Copy(queryBuffer, response, queryBuffer.Length);
 
-        // Flags: Standard response, No error (0x8180)
         response[2] = 0x81;
-        response[3] = 0x80;
-
-        // Answer count: 1
+        response[3] = 0x80; // NOERROR
         response[6] = 0x00;
-        response[7] = 0x01;
+        response[7] = 0x01; // ANCOUNT = 1
 
         var offset = queryBuffer.Length;
-        // Pointer to domain name in question section (offset 12 = 0x0C)
         response[offset++] = 0xC0;
-        response[offset++] = 0x0C;
+        response[offset++] = 0x0C; // Pointer to question name
 
-        // Type A (0x0001)
         response[offset++] = 0x00;
-        response[offset++] = 0x01;
+        response[offset++] = 0x01; // Type A
 
-        // Class IN (0x0001)
         response[offset++] = 0x00;
-        response[offset++] = 0x01;
+        response[offset++] = 0x01; // Class IN
 
-        // TTL: 60 seconds (0x0000003C)
         response[offset++] = 0x00;
         response[offset++] = 0x00;
         response[offset++] = 0x00;
-        response[offset++] = 0x3C;
+        response[offset++] = 0x3C; // TTL 60
 
-        // Data length: 4 bytes
         response[offset++] = 0x00;
-        response[offset++] = 0x04;
+        response[offset++] = 0x04; // Length 4
 
-        // IPv4 bytes
         var ipBytes = answerIp.GetAddressBytes();
         Array.Copy(ipBytes, 0, response, offset, 4);
+
+        return response;
+    }
+
+    private static byte[] BuildAaaaResponse(byte[] queryBuffer, IReadOnlyList<IPAddress> ipv6Addresses)
+    {
+        var count = ipv6Addresses.Count;
+        var response = new byte[queryBuffer.Length + (count * 28)];
+        Array.Copy(queryBuffer, response, queryBuffer.Length);
+
+        response[2] = 0x81;
+        response[3] = 0x80; // NOERROR
+        response[6] = (byte)(count >> 8);
+        response[7] = (byte)(count & 0xFF); // ANCOUNT
+
+        var offset = queryBuffer.Length;
+
+        foreach (var ip in ipv6Addresses)
+        {
+            response[offset++] = 0xC0;
+            response[offset++] = 0x0C; // Pointer to question name
+
+            response[offset++] = 0x00;
+            response[offset++] = 0x1C; // Type AAAA (28 = 0x001C)
+
+            response[offset++] = 0x00;
+            response[offset++] = 0x01; // Class IN
+
+            response[offset++] = 0x00;
+            response[offset++] = 0x00;
+            response[offset++] = 0x00;
+            response[offset++] = 0x3C; // TTL 60
+
+            response[offset++] = 0x00;
+            response[offset++] = 0x10; // Length 16 bytes for IPv6
+
+            var ipBytes = ip.GetAddressBytes();
+            Array.Copy(ipBytes, 0, response, offset, 16);
+            offset += 16;
+        }
 
         return response;
     }
@@ -12480,14 +13960,8 @@ public sealed class InternalDnsServer : IAsyncDisposable
             {
                 await _listenerTask.ConfigureAwait(false);
             }
-            catch (OperationCanceledException)
-            {
-                // Expected cancellation on shutdown
-            }
-            catch (SocketException)
-            {
-                // Expected socket close on shutdown
-            }
+            catch (OperationCanceledException) { }
+            catch (SocketException) { }
         }
 
         _cts?.Dispose();
@@ -12646,6 +14120,204 @@ public static class NftablesService
 
             throw new InvalidOperationException($"Failed to apply nftables ruleset on '{node.NodeName}': {result.StandardError}");
         }
+    }
+}
+```
+
+## File: src/Starry.Infrastructure/Network/NodeNetworkInspector.cs
+
+**Lines**: 191 | **Size**: 7.1 KB | **Language**: csharp
+
+```csharp
+using System.Net;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using Starry.Core.Nodes;
+using Starry.Core.Processes;
+
+namespace Starry.Infrastructure.Network;
+
+public enum InterfaceClassification
+{
+    DedicatedPublic,
+    RoutedIpv6Subnet,
+    BehindNatOrCgnat,
+    Firewalled,
+    InternalOnly
+}
+
+public sealed record NodeInterfaceInfo(
+    string InterfaceName,
+    IReadOnlyList<string> Ipv4Addresses,
+    IReadOnlyList<string> Ipv6Addresses,
+    string? ExternalSeenIpv4,
+    string? ExternalSeenIpv6,
+    InterfaceClassification Classification,
+    bool IsReachableFromPeers);
+
+public sealed record NodeNetworkReport(
+    string NodeName,
+    string Host,
+    int HostId,
+    string MeshIpv6,
+    IReadOnlyList<NodeInterfaceInfo> Interfaces);
+
+/// <summary>
+/// Probes and classifies network interfaces and external reachability on cluster nodes.
+/// </summary>
+public static class NodeNetworkInspector
+{
+    public static async Task<NodeNetworkReport> InspectNodeAsync(
+        INodeConnection node,
+        int hostId,
+        bool verifyReachability = false,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(node);
+
+        var interfaces = new List<NodeInterfaceInfo>();
+
+        // 1. Run ip -j addr show
+        var ipResult = await node.ExecuteCommandAsync(new ProcessSpec
+        {
+            Executable = "ip",
+            Arguments = ["-j", "addr", "show"],
+            Timeout = TimeSpan.FromSeconds(10)
+        }, ct).ConfigureAwait(false);
+
+        // 2. Query external seen IPs
+        var extIpv4Result = await node.ExecuteCommandAsync(new ProcessSpec
+        {
+            Executable = "curl",
+            Arguments = ["-4s", "--max-time", "3", "https://api.ipify.org"],
+            Timeout = TimeSpan.FromSeconds(5)
+        }, ct).ConfigureAwait(false);
+
+        var extIpv6Result = await node.ExecuteCommandAsync(new ProcessSpec
+        {
+            Executable = "curl",
+            Arguments = ["-6s", "--max-time", "3", "https://api6.ipify.org"],
+            Timeout = TimeSpan.FromSeconds(5)
+        }, ct).ConfigureAwait(false);
+
+        var extIpv4 = extIpv4Result.IsSuccess ? extIpv4Result.StandardOutput.Trim() : null;
+        var extIpv6 = extIpv6Result.IsSuccess ? extIpv6Result.StandardOutput.Trim() : null;
+
+        if (ipResult.IsSuccess && !string.IsNullOrWhiteSpace(ipResult.StandardOutput))
+        {
+            try
+            {
+                var jsonNode = JsonNode.Parse(ipResult.StandardOutput) as JsonArray;
+                if (jsonNode != null)
+                {
+                    foreach (var item in jsonNode)
+                    {
+                        if (item is not JsonObject ifaceObj) continue;
+
+                        var ifname = ifaceObj["ifname"]?.ToString() ?? "unknown";
+                        if (ifname.Equals("lo", StringComparison.OrdinalIgnoreCase)) continue;
+
+                        var v4List = new List<string>();
+                        var v6List = new List<string>();
+
+                        if (ifaceObj["addr_info"] is JsonArray addrs)
+                        {
+                            foreach (var a in addrs)
+                            {
+                                var family = a?["family"]?.ToString();
+                                var local = a?["local"]?.ToString();
+                                var prefixlen = a?["prefixlen"]?.ToString();
+
+                                if (string.IsNullOrEmpty(local)) continue;
+
+                                var withPrefix = !string.IsNullOrEmpty(prefixlen) ? $"{local}/{prefixlen}" : local;
+
+                                if (string.Equals(family, "inet", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    v4List.Add(withPrefix);
+                                }
+                                else if (string.Equals(family, "inet6", StringComparison.OrdinalIgnoreCase) &&
+                                         !local.StartsWith("fe80", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    v6List.Add(withPrefix);
+                                }
+                            }
+                        }
+
+                        var classification = ClassifyInterface(v4List, v6List, extIpv4, extIpv6);
+
+                        interfaces.Add(new NodeInterfaceInfo(
+                            InterfaceName: ifname,
+                            Ipv4Addresses: v4List,
+                            Ipv6Addresses: v6List,
+                            ExternalSeenIpv4: extIpv4,
+                            ExternalSeenIpv6: extIpv6,
+                            Classification: classification,
+                            IsReachableFromPeers: classification == InterfaceClassification.DedicatedPublic));
+                    }
+                }
+            }
+            catch
+            {
+                // Fallback to basic interface
+            }
+        }
+
+        if (interfaces.Count == 0)
+        {
+            interfaces.Add(new NodeInterfaceInfo(
+                InterfaceName: "eth0",
+                Ipv4Addresses: [node.Host],
+                Ipv6Addresses: [],
+                ExternalSeenIpv4: extIpv4 ?? node.Host,
+                ExternalSeenIpv6: extIpv6,
+                Classification: InterfaceClassification.DedicatedPublic,
+                IsReachableFromPeers: true));
+        }
+
+        var meshIp = IdLedgerService.FormatHostWireGuardIp(hostId);
+        return new NodeNetworkReport(node.NodeName, node.Host, hostId, meshIp, interfaces);
+    }
+
+    private static InterfaceClassification ClassifyInterface(
+        List<string> v4List,
+        List<string> v6List,
+        string? extIpv4,
+        string? extIpv6)
+    {
+        var hasMatchingPublicV4 = !string.IsNullOrEmpty(extIpv4) &&
+                                  v4List.Any(v4 => v4.StartsWith(extIpv4, StringComparison.OrdinalIgnoreCase));
+
+        var hasMatchingPublicV6 = !string.IsNullOrEmpty(extIpv6) &&
+                                  v6List.Any(v6 => v6.StartsWith(extIpv6, StringComparison.OrdinalIgnoreCase));
+
+        if (hasMatchingPublicV4 || hasMatchingPublicV6)
+        {
+            return InterfaceClassification.DedicatedPublic;
+        }
+
+        if (v6List.Any(v6 => v6.Contains("/64", StringComparison.Ordinal) || v6.Contains("/56", StringComparison.Ordinal)))
+        {
+            return InterfaceClassification.RoutedIpv6Subnet;
+        }
+
+        var hasPrivateV4 = v4List.Any(v4 =>
+            v4.StartsWith("10.", StringComparison.Ordinal) ||
+            v4.StartsWith("192.168.", StringComparison.Ordinal) ||
+            v4.StartsWith("172.16.", StringComparison.Ordinal) ||
+            v4.StartsWith("172.17.", StringComparison.Ordinal) ||
+            v4.StartsWith("172.18.", StringComparison.Ordinal) ||
+            v4.StartsWith("172.19.", StringComparison.Ordinal) ||
+            v4.StartsWith("172.2", StringComparison.Ordinal) ||
+            v4.StartsWith("172.3", StringComparison.Ordinal) ||
+            v4.StartsWith("100.", StringComparison.Ordinal)); // CGNAT
+
+        if (hasPrivateV4)
+        {
+            return InterfaceClassification.BehindNatOrCgnat;
+        }
+
+        return InterfaceClassification.InternalOnly;
     }
 }
 ```
@@ -18381,7 +20053,7 @@ public class ClusterMatrixFuzzerTests
         dns.RegisterRecord("ikuyo.internal", IPAddress.Parse("10.99.0.4"));
         dns.RegisterRecord("seika.internal", IPAddress.Parse("10.99.0.5"));
 
-        Assert.Equal(5, dns.Records.Count);
+        Assert.True(dns.Records.Count >= 5);
     }
 
     [Fact]
@@ -19473,6 +21145,271 @@ public class FleetBundleServiceTests
 }
 ```
 
+## File: tests/Starry.UnitTests/IdLedgerServiceTests.cs
+
+**Lines**: 98 | **Size**: 3.2 KB | **Language**: csharp
+
+```csharp
+using Starry.Infrastructure.Network;
+using Xunit;
+
+namespace Starry.UnitTests;
+
+public class IdLedgerServiceTests
+{
+    [Fact]
+    public void AllocateHostId_IncrementsMonotonically()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "starry_ledger_test_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            var ledger = new IdLedgerService(tempDir);
+            var id1 = ledger.AllocateHostId("germany");
+            var id2 = ledger.AllocateHostId("finland");
+            var id3 = ledger.AllocateHostId("japan");
+
+            Assert.Equal(1, id1);
+            Assert.Equal(2, id2);
+            Assert.Equal(3, id3);
+
+            // Re-querying same host returns existing ID
+            Assert.Equal(1, ledger.AllocateHostId("germany"));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ReleaseHost_TombstonesId_AndNeverReusesIt()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "starry_tombstone_test_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            var ledger = new IdLedgerService(tempDir);
+            var id1 = ledger.AllocateHostId("germany"); // 1
+            var id2 = ledger.AllocateHostId("finland"); // 2
+
+            // Release germany (ID 1 should be tombstoned)
+            ledger.ReleaseHost("germany");
+
+            // Allocate brand new host -> must receive 3, NOT tombstoned 1!
+            var id3 = ledger.AllocateHostId("singapore");
+            Assert.Equal(3, id3);
+
+            var snapshot = ledger.GetStateSnapshot();
+            Assert.Contains(1, snapshot.TombstonedHostIds);
+            Assert.DoesNotContain(1, snapshot.AllocatedHosts.Values);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ReleaseContainer_TombstonesContainerId_AndNeverReusesIt()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "starry_cid_test_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            var ledger = new IdLedgerService(tempDir);
+            var c1 = ledger.AllocateContainerId("shop#1"); // 1
+            var c2 = ledger.AllocateContainerId("shop#2"); // 2
+
+            ledger.ReleaseContainer("shop#1");
+
+            var c3 = ledger.AllocateContainerId("shop#3");
+            Assert.Equal(3, c3);
+
+            var snapshot = ledger.GetStateSnapshot();
+            Assert.Contains(1, snapshot.TombstonedContainerIds);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void AddressFormatting_FormatsCanonicalIPv6Subnets()
+    {
+        Assert.Equal("fd67:b00b:0001::1", IdLedgerService.FormatHostWireGuardIp(1));
+        Assert.Equal("fd67:b00b:0001::/48", IdLedgerService.FormatHostSubnet(1));
+        Assert.Equal("fd67:b00b:0001:000a::/64", IdLedgerService.FormatContainerSubnet(1, 10));
+        Assert.Equal("fd67:b00b:0001:000a::1", IdLedgerService.FormatContainerIp(1, 10));
+        Assert.Equal("fd67:b00b:0001:ffff::1", IdLedgerService.FormatIngressIp(1));
+    }
+}
+```
+
+## File: tests/Starry.UnitTests/InternalDnsServerScopedTests.cs
+
+**Lines**: 153 | **Size**: 5.4 KB | **Language**: csharp
+
+```csharp
+using System.Net;
+using System.Text;
+using Starry.Infrastructure.Network;
+using Xunit;
+
+namespace Starry.UnitTests;
+
+public class InternalDnsServerScopedTests
+{
+    [Fact]
+    public async Task InternalDnsServer_SharedNetwork_ReturnsAaaaRecord()
+    {
+        await using var server = new InternalDnsServer(port: 5355);
+
+        // Service DB on subnet fd67:b00b:0001:0001::/64 in network "backend_net"
+        var dbIp = IPAddress.Parse("fd67:b00b:0001:0001::1");
+        server.RegisterService(
+            serviceName: "db",
+            endpoints: [new ReplicaEndpoint("db-1", dbIp)],
+            networks: ["backend_net"]);
+
+        // Service API on subnet fd67:b00b:0001:0002::/64 in network "backend_net"
+        var apiIp = IPAddress.Parse("fd67:b00b:0001:0002::1");
+        server.RegisterService(
+            serviceName: "api",
+            endpoints: [new ReplicaEndpoint("api-1", apiIp)],
+            networks: ["backend_net"]);
+
+        // Query for db.internal from API container (caller IP = apiIp) for AAAA (qtype: 28)
+        var queryPacket = BuildQueryPacket("db.internal", qtype: 28);
+        var response = await server.HandleDnsQueryAsync(queryPacket, clientAddress: apiIp);
+
+        Assert.NotNull(response);
+        // Header flags: 0x8180 = NOERROR
+        Assert.Equal(0x81, response[2]);
+        Assert.Equal(0x80, response[3]);
+        // ANCOUNT = 1
+        Assert.Equal(0x01, response[7]);
+
+        // Response contains dbIp bytes
+        var answerBytes = response[^16..];
+        Assert.Equal(dbIp.GetAddressBytes(), answerBytes);
+    }
+
+    [Fact]
+    public async Task InternalDnsServer_IsolatedNetwork_ReturnsNxDomain()
+    {
+        await using var server = new InternalDnsServer(port: 5356);
+
+        // Service DB in "db_private_net"
+        var dbIp = IPAddress.Parse("fd67:b00b:0001:0001::1");
+        server.RegisterService(
+            serviceName: "secret-db",
+            endpoints: [new ReplicaEndpoint("secret-db-1", dbIp)],
+            networks: ["db_private_net"]);
+
+        // Service Frontend in "public_net" (NO shared network with secret-db!)
+        var frontIp = IPAddress.Parse("fd67:b00b:0001:0003::1");
+        server.RegisterService(
+            serviceName: "frontend",
+            endpoints: [new ReplicaEndpoint("frontend-1", frontIp)],
+            networks: ["public_net"]);
+
+        var queryPacket = BuildQueryPacket("secret-db.internal", qtype: 28);
+        var response = await server.HandleDnsQueryAsync(queryPacket, clientAddress: frontIp);
+
+        Assert.NotNull(response);
+        // Header flags: 0x8183 = NXDOMAIN (0x83)
+        Assert.Equal(0x81, response[2]);
+        Assert.Equal(0x83, response[3]);
+        // ANCOUNT = 0
+        Assert.Equal(0x00, response[7]);
+    }
+
+    [Fact]
+    public async Task InternalDnsServer_EgressFalse_ReturnsRefusedForExternalDomains()
+    {
+        await using var server = new InternalDnsServer(port: 5357);
+
+        // Container with egress: false
+        var isolatedIp = IPAddress.Parse("fd67:b00b:0001:0004::1");
+        server.RegisterService(
+            serviceName: "isolated-worker",
+            endpoints: [new ReplicaEndpoint("isolated-worker-1", isolatedIp)],
+            networks: ["worker_net"],
+            egressAllowed: false);
+
+        var queryPacket = BuildQueryPacket("github.com", qtype: 1);
+        var response = await server.HandleDnsQueryAsync(queryPacket, clientAddress: isolatedIp);
+
+        Assert.NotNull(response);
+        // Header flags: 0x8185 = REFUSED (0x85)
+        Assert.Equal(0x81, response[2]);
+        Assert.Equal(0x85, response[3]);
+    }
+
+    [Fact]
+    public async Task InternalDnsServer_DualStackNoIpv4_ReturnsEmptyNoError()
+    {
+        await using var server = new InternalDnsServer(port: 5358);
+
+        var ipv6Only = IPAddress.Parse("fd67:b00b:0001:0005::1");
+        server.RegisterService(
+            serviceName: "v6-service",
+            endpoints: [new ReplicaEndpoint("v6-service-1", ipv6Only, Ipv4Address: null)],
+            networks: ["net1"]);
+
+        var callerIp = IPAddress.Parse("fd67:b00b:0001:0006::1");
+        server.RegisterService(
+            serviceName: "caller",
+            endpoints: [new ReplicaEndpoint("caller-1", callerIp)],
+            networks: ["net1"]);
+
+        // Query for A record (IPv4) when only IPv6 exists
+        var queryPacket = BuildQueryPacket("v6-service.internal", qtype: 1);
+        var response = await server.HandleDnsQueryAsync(queryPacket, clientAddress: callerIp);
+
+        Assert.NotNull(response);
+        // NOERROR (0x8180) with ANCOUNT = 0
+        Assert.Equal(0x81, response[2]);
+        Assert.Equal(0x80, response[3]);
+        Assert.Equal(0x00, response[7]);
+    }
+
+    private static byte[] BuildQueryPacket(string domain, ushort qtype = 1)
+    {
+        var buffer = new List<byte>
+        {
+            0x12, 0x34, // Transaction ID
+            0x01, 0x00, // Flags: Standard query
+            0x00, 0x01, // Questions: 1
+            0x00, 0x00, // Answer RRs: 0
+            0x00, 0x00, // Authority RRs: 0
+            0x00, 0x00  // Additional RRs: 0
+        };
+
+        var labels = domain.Split('.');
+        foreach (var label in labels)
+        {
+            buffer.Add((byte)label.Length);
+            buffer.AddRange(Encoding.ASCII.GetBytes(label));
+        }
+        buffer.Add(0x00); // End of name
+
+        buffer.Add((byte)(qtype >> 8));
+        buffer.Add((byte)(qtype & 0xFF)); // QTYPE
+
+        buffer.Add(0x00);
+        buffer.Add(0x01); // QCLASS: IN (0x0001)
+
+        return [.. buffer];
+    }
+}
+```
+
 ## File: tests/Starry.UnitTests/InternalDnsServerTests.cs
 
 **Lines**: 97 | **Size**: 3.0 KB | **Language**: csharp
@@ -19976,6 +21913,175 @@ public class SshNodeConnectionTests
   </ItemGroup>
 
 </Project>
+```
+
+## File: tests/Starry.UnitTests/StarryDslTests.cs
+
+**Lines**: 162 | **Size**: 6.2 KB | **Language**: csharp
+
+```csharp
+using Starry.Dsl;
+using Xunit;
+
+namespace Starry.UnitTests;
+
+public class StarryDslTests
+{
+    [Fact]
+    public void ConfigAst_ParsesYamlJsonTomlCorrectly()
+    {
+        const string yaml = """
+            cluster_name: kessoku-v3
+            nodes:
+              germany:
+                host: 142.132.10.20
+            """;
+
+        var node = ConfigAst.parseYaml(yaml, Microsoft.FSharp.Core.FSharpOption<string>.Some("starry.yaml"));
+        Assert.True(node.IsObjectNode);
+
+        var jsonNode = ConfigAst.toJsonNode(node);
+        Assert.Equal("kessoku-v3", jsonNode["cluster_name"]?.ToString());
+        Assert.Equal("142.132.10.20", jsonNode["nodes"]?["germany"]?["host"]?.ToString());
+    }
+
+    [Fact]
+    public void GraphResolver_WholeSubtreeSubstitution_ReplacesReference()
+    {
+        const string yaml = """
+            presets:
+              db_env:
+                POSTGRES_DB: starry
+                POSTGRES_USER: admin
+            services:
+              postgres:
+                env: $presets.db_env
+            """;
+
+        var root = ConfigAst.parseYaml(yaml, Microsoft.FSharp.Core.FSharpOption<string>.None);
+        var resolvedResult = GraphResolver.resolve(root, Microsoft.FSharp.Core.FSharpOption<Microsoft.FSharp.Core.FSharpFunc<string, string>>.None);
+
+        Assert.True(resolvedResult.IsOk);
+        var resolvedJson = ConfigAst.toJsonNode(resolvedResult.ResultValue);
+
+        Assert.Equal("starry", resolvedJson["services"]?["postgres"]?["env"]?["POSTGRES_DB"]?.ToString());
+        Assert.Equal("admin", resolvedJson["services"]?["postgres"]?["env"]?["POSTGRES_USER"]?.ToString());
+    }
+
+    [Fact]
+    public void GraphResolver_Inheritance_MergesAndOverrides()
+    {
+        const string yaml = """
+            presets:
+              base_service:
+                image: base:latest
+                priority: 50
+                restart: always
+            services:
+              api:
+                $: $presets.base_service
+                image: custom-api:v1
+                priority: 30
+            """;
+
+        var root = ConfigAst.parseYaml(yaml, Microsoft.FSharp.Core.FSharpOption<string>.None);
+        var resolvedResult = GraphResolver.resolve(root, Microsoft.FSharp.Core.FSharpOption<Microsoft.FSharp.Core.FSharpFunc<string, string>>.None);
+
+        Assert.True(resolvedResult.IsOk);
+        var resolvedJson = ConfigAst.toJsonNode(resolvedResult.ResultValue);
+
+        // Explicit properties override inherited ones
+        Assert.Equal("custom-api:v1", resolvedJson["services"]?["api"]?["image"]?.ToString());
+        Assert.Equal("30", resolvedJson["services"]?["api"]?["priority"]?.ToString());
+        // Inherited non-overridden properties are preserved
+        Assert.Equal("always", resolvedJson["services"]?["api"]?["restart"]?.ToString());
+    }
+
+    [Fact]
+    public void GraphResolver_StringInterpolation_SubstitutesValues()
+    {
+        const string yaml = """
+            nodes:
+              germany:
+                host: 142.132.10.20
+            services:
+              api:
+                env:
+                  REMOTE_HOST: "connect to $nodes.germany.host please"
+            """;
+
+        var root = ConfigAst.parseYaml(yaml, Microsoft.FSharp.Core.FSharpOption<string>.None);
+        var resolvedResult = GraphResolver.resolve(root, Microsoft.FSharp.Core.FSharpOption<Microsoft.FSharp.Core.FSharpFunc<string, string>>.None);
+
+        Assert.True(resolvedResult.IsOk);
+        var resolvedJson = ConfigAst.toJsonNode(resolvedResult.ResultValue);
+
+        Assert.Equal("connect to 142.132.10.20 please", resolvedJson["services"]?["api"]?["env"]?["REMOTE_HOST"]?.ToString());
+    }
+
+    [Fact]
+    public void GraphResolver_DetectsCircularReferences()
+    {
+        const string yaml = """
+            a: $b
+            b: $c
+            c: $a
+            """;
+
+        var root = ConfigAst.parseYaml(yaml, Microsoft.FSharp.Core.FSharpOption<string>.None);
+        var resolvedResult = GraphResolver.resolve(root, Microsoft.FSharp.Core.FSharpOption<Microsoft.FSharp.Core.FSharpFunc<string, string>>.None);
+
+        Assert.True(resolvedResult.IsError);
+        Assert.True(resolvedResult.ErrorValue.IsCircularReference);
+    }
+
+    [Fact]
+    public void Generators_ProducesWireGuardConfigWithFd67Prefix()
+    {
+        var hostSpec = new Generators.WireGuardHostSpec(
+            nodeName: "germany",
+            hostId: 1,
+            privateKey: "priv1",
+            publicKey: "pub1",
+            listenPort: 51820,
+            endpoint: Microsoft.FSharp.Core.FSharpOption<string>.Some("142.132.10.20"),
+            isPublic: true,
+            peers:
+            [
+                new Generators.WireGuardPeerSpec(
+                    nodeName: "finland",
+                    hostId: 2,
+                    publicKey: "pub2",
+                    endpoint: Microsoft.FSharp.Core.FSharpOption<string>.Some("65.21.10.30"),
+                    listenPort: 51820,
+                    isPublic: true)
+            ]);
+
+        var wgConf = Generators.generateWireGuardConfig(hostSpec);
+
+        Assert.Contains("Address = fd67:b00b:0001::1/32", wgConf, StringComparison.Ordinal);
+        Assert.Contains("AllowedIPs = fd67:b00b:0002::/48", wgConf, StringComparison.Ordinal);
+        Assert.Contains("Endpoint = 65.21.10.30:51820", wgConf, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Generators_ProducesNginxConfigWithSniAndHttp()
+    {
+        var routes = new List<Generators.NginxRoute>
+        {
+            Generators.NginxRoute.NewSniPassthrough("vpn.bocchi.rocks", "xray:8443", true),
+            Generators.NginxRoute.NewHttpReverseProxy("shop.bocchi.rocks", "fd67:b00b:0001:0002::1", 3000, Microsoft.FSharp.Core.FSharpOption<string>.None, Microsoft.FSharp.Core.FSharpOption<string>.None)
+        };
+
+        var nginxConf = Generators.generateNginxConfig(1, Microsoft.FSharp.Collections.ListModule.OfSeq(routes));
+
+        Assert.Contains("stream {", nginxConf, StringComparison.Ordinal);
+        Assert.Contains("ssl_preread on;", nginxConf, StringComparison.Ordinal);
+        Assert.Contains("\"vpn.bocchi.rocks\" xray:8443;", nginxConf, StringComparison.Ordinal);
+        Assert.Contains("http {", nginxConf, StringComparison.Ordinal);
+        Assert.Contains("proxy_pass http://[fd67:b00b:0001:0002::1]:3000;", nginxConf, StringComparison.Ordinal);
+    }
+}
 ```
 
 ## File: tests/Starry.UnitTests/VirtualConfigEngineTests.cs

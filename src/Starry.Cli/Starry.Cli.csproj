@@ -37,6 +37,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Starry.Core\Starry.Core.csproj" />
     <ProjectReference Include="..\Starry.Infrastructure\Starry.Infrastructure.csproj" />
+    <ProjectReference Include="..\Starry.Dsl\Starry.Dsl.fsproj" />
   </ItemGroup>
 
   <ItemGroup>

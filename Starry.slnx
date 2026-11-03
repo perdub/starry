@@ -2,6 +2,7 @@
   <Folder Name="/src/">
     <Project Path="src/Starry.Cli/Starry.Cli.csproj" />
     <Project Path="src/Starry.Core/Starry.Core.csproj" />
+    <Project Path="src/Starry.Dsl/Starry.Dsl.fsproj" />
     <Project Path="src/Starry.Infrastructure/Starry.Infrastructure.csproj" />
   </Folder>
   <Folder Name="/tests/">

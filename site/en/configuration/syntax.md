@@ -1,156 +1,110 @@
-# Configuration Architecture & Syntax
+# Configuration Architecture & Syntax (Starry v3.0)
 
-Starry leverages an advanced **Virtual Config Engine**: you can define your infrastructure as a single monolith file (`starry.yaml`) or break it down into modular directories and files across multiple formats (**YAML**, **JSON**, **TOML**). Starry seamlessly merges them into a virtual configuration tree while preserving exact source file coordinates (**Source Map**).
-
----
-
-## 1. Modular Directory Organization (Best Practices)
-
-### For Small Fleets (Single File)
-For 1–3 servers, keeping everything in a single root file is simplest:
-
-```text
-my-fleet/
-├── starry.yaml
-└── .gitignore
-```
-
-### For Medium & Large Fleets (Modular Hierarchy)
-As your fleet grows with multiple nodes and services, a modular layout is recommended:
-
-```text
-cluster/
-├── starry.yaml               # Cluster global settings & mesh network
-├── nodes/
-│   ├── bocchi.yaml           # Node bocchi -> root.nodes.bocchi
-│   ├── nijika.json           # Node nijika -> root.nodes.nijika
-│   └── ryo.toml              # Node ryo -> root.nodes.ryo
-└── services/
-    ├── api.yaml              # Service api -> root.services.api
-    ├── database.toml         # Service database -> root.services.database
-    └── frontend.json         # Service frontend -> root.services.frontend
-```
-
-Starry automatically maps relative file paths to canonical JSON paths:
-- `nodes/bocchi.yaml` mounts to `root.nodes.bocchi`
-- `services/api.toml` mounts to `root.services.api`
-- Files named `starry.yaml` or `config.yaml` at root merge directly into `root`
-
-Every leaf property retains its exact file, line, and column reference in the **Source Map**, making validation and schema errors precise!
+In **Starry v3.0**, the configuration engine is powered by the pure functional library **`Starry.Dsl`** (written in F#). The entire cluster infrastructure is modeled as an immutable graph with whole-subtree substitution, object inheritance via `$:`, and inline secret interpolation.
 
 ---
 
-## 2. Multi-Format Support: YAML, JSON & TOML
+## 1. Unified Config Graph AST & File Layout
 
-You can freely mix formats within a single project! Below is the same configuration snippet across all three supported formats:
-
-::: code-group
-
-```yaml [YAML (nodes/bocchi.yaml)]
-host: "198.51.100.10"
-port: 22
-vpn_ip: "10.99.0.1"
-engine: "docker"
-packages:
-  - wireguard
-  - nftables
-  - curl
-```
-
-```toml [TOML (nodes/bocchi.toml)]
-host = "198.51.100.10"
-port = 22
-vpn_ip = "10.99.0.1"
-engine = "docker"
-packages = ["wireguard", "nftables", "curl"]
-```
-
-```json [JSON (nodes/bocchi.json)]
-{
-  "host": "198.51.100.10",
-  "port": 22,
-  "vpn_ip": "10.99.0.1",
-  "engine": "docker",
-  "packages": [
-    "wireguard",
-    "nftables",
-    "curl"
-  ]
-}
-```
-
-:::
+Every file and directory within the configuration path is mounted into a single immutable AST:
+- **Structured Files (`.yaml`, `.json`, `.toml`):** Parsed and mounted to their respective tree branches (e.g. `nodes/germany.yaml` -> `root.nodes.germany`).
+- **Raw Text Files (`files/*`):** Text files (such as `files/nginx.conf` or `files/init.sql`) are mounted as `StringNode` objects under their path (`root.files.["nginx.conf"]`).
+- **Custom Branches:** Users can organize arbitrary user branches (`presets`, `secrets`, `vars`, `dns_providers`, `backups`, `certs`) without schema rejection.
 
 ---
 
-## 3. Cluster Schema & Spec
+## 2. Graph References (`$`) & Object Inheritance (`$:`)
 
-The cluster manifest defines cluster nodes (`nodes`), overlay mesh network (`mesh`), container services (`services`), and backup policies:
+### Whole-Subtree Substitution
+When a property references a graph path (e.g. `env: "$presets.db_env"`), Starry replaces the reference with a deep copy of the resolved subtree:
 
 ```yaml
-version: "1.0"
-cluster_name: "kessoku-prod"
+presets:
+  db_env:
+    POSTGRES_DB: "starry"
+    POSTGRES_USER: "admin"
+    POSTGRES_PASSWORD: "ENC[AES256_GCM:v1:...]"
 
-# WireGuard Mesh network settings
-mesh:
-  cidr: "10.99.0.0/16"
-  port: 51820
-  keepalive: 25
+services:
+  database:
+    image: "postgres:16"
+    env: "$presets.db_env"
+```
 
-# Cluster nodes
-nodes:
-  bocchi:
-    host: "198.51.100.10"
-    port: 22
-    vpn_ip: "10.99.0.1"
-    is_public: true
-    ssh_key: "ENC[AES256_GCM:v1:nonce:cipher:tag]"
+### Inheritance & Merging (`$:`)
+Using the special `"$"` key, a service or node can inherit and merge properties from one or more base presets:
 
-# Container services
+```yaml
+presets:
+  base_service:
+    restart: "always"
+    priority: 50
+    networks: ["$networks.app_net"]
+
 services:
   web:
+    $: "$presets.base_service"
     image: "nginx:alpine"
-    node: "bocchi"
-    priority: 80
-    ports:
-      - "80:80"
-      - "443:443"
-    env:
-      DB_PASSWORD: "ENC[AES256_GCM:v1:nonce:cipher:tag]"
+    priority: 80 # Overrides priority from base_service
+```
+
+### String & File Interpolation
+All strings and text files support `$path.to.value` and `${path.to.value}` interpolation, with automatic secret decryption during deployment.
+
+---
+
+## 3. IPv6 Mesh (`fd67:b00b::/32`) & Monotonic ID Ledger
+
+* **Cluster ULA Prefix:** `fd67:b00b::/32`.
+* **Host Subnet (`/48`):** Each node is assigned `fd67:b00b:<host_id>::/48`. WireGuard interface `starry0` has address `fd67:b00b:<host_id>::1/32`, and peers route `AllowedIPs = fd67:b00b:<host_id>::/48` statically.
+* **Container Replica Subnet (`/64`):** Each container replica gets a dedicated `/64` subnet `fd67:b00b:<host_id>:<container_id>::/64` with a single interface `eth0` bound to `fd67:b00b:<host_id>:<container_id>::1/64`.
+* **Tombstone Ledger (`.starry/id-ledger.json`):** Released host and container IDs are permanently tombstoned and never reused.
+
+---
+
+## 4. Named Bidirectional Routing (`ports:`)
+
+```yaml
+ports:
+  shop_https_v4:
+    from: "$nodes.germany.ipv4:443"
+    to: "$ingress:443"
+    proto: "tcp"
+    bidirectional: true # Inbound DNAT + symmetric outbound SNAT!
+
+  custom_proxy:
+    from: "$nodes.finland.ipv4:443"
+    to: "my-proxy:443"
 ```
 
 ---
 
-## 4. Configuration Management Commands (CLI)
+## 5. Managed Ingress (`$ingress`) & L4 SNI Proxying
 
-Starry provides a suite of CLI tools for inspecting and transforming configs:
+* `$ingress` binds internally to `fd67:b00b:<host_id>:ffff::1` and never intercepts port 443 without explicit rules in `ports:`.
+* Routing uses Nginx `stream { ssl_preread on; }`:
+  - `sni: "<target>"` passes TLS traffic through at Layer 4 without certificate termination.
+  - `http: "<target>"` routes internally to `http {}` for SSL termination and reverse proxying.
 
-### Validation (`starry config validate`)
-Verifies schema constraints, required fields, network addresses, and encrypted secret syntax:
-```bash
-starry config validate ./cluster
+---
+
+## 6. Hierarchical Domains (`domains:`) & Cloudflare Origin Rules
+
+```yaml
+domains:
+  rocks:
+    bocchi:
+      dns_provider: "$dns_providers.cf"
+      cert: "$certs.bocchi_wildcard"
+      node: "$nodes.germany"
+
+      "@":
+        http: "landing:80"
+      shop:
+        http: "shop-web:3000"
+      vpn:
+        sni: "xray:8443"
+        proxy_protocol: true
 ```
 
-### Packing (`starry config pack`)
-Packs a modular directory hierarchy into a single bundle file:
-```bash
-starry config pack ./cluster -o starry.bundle.yaml --format yaml
-```
-
-### Splitting (`starry config split`)
-Splits a monolithic bundle back into standard modular folders (`nodes/`, `services/`):
-```bash
-starry config split starry.bundle.yaml -o ./modular-config --format yaml
-```
-
-### Canonical Formatting (`starry config fmt`)
-Formats config files cleanly according to canonical formatting rules:
-```bash
-starry config fmt cluster/nodes/bocchi.yaml
-```
-
-### JSON Schema Generation (`starry config schema`)
-Generates the official JSON Schema for IDE validation and autocompletion:
-```bash
-starry config schema > starry.schema.json
-```
+When an ingress entry port is non-standard (e.g. 8443), Starry automatically programs Cloudflare Origin Rules via the Rulesets API to rewrite origin ports transparently!

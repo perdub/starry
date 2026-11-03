@@ -3,24 +3,31 @@ using Starry.Infrastructure.Security;
 namespace Starry.Infrastructure.Configuration;
 
 /// <summary>
-/// Initializes a new Starry GitOps repository directory with standard layout and gitignore.
+/// Initializes a new Starry GitOps repository directory with standard layout, .gitignore, and fd67:b00b::/32 mesh.
 /// </summary>
 public static class RepositoryInitializer
 {
-    public static (string MasterKeyBase64, string TargetDir) Initialize(string? targetDir = null, string clusterName = "starry-fleet")
+    public static (string MasterKeyBase64, string TargetDir) Initialize(
+        string? projectName = null,
+        bool skipFolderCreate = false,
+        string? baseDir = null)
     {
-        var resolvedDir = string.IsNullOrWhiteSpace(targetDir) ? Directory.GetCurrentDirectory() : Path.GetFullPath(targetDir);
+        var root = string.IsNullOrWhiteSpace(baseDir) ? Directory.GetCurrentDirectory() : Path.GetFullPath(baseDir);
+        var targetDir = !skipFolderCreate && !string.IsNullOrWhiteSpace(projectName)
+            ? Path.Combine(root, projectName)
+            : root;
 
-        Directory.CreateDirectory(resolvedDir);
-        Directory.CreateDirectory(Path.Combine(resolvedDir, "nodes"));
-        Directory.CreateDirectory(Path.Combine(resolvedDir, "services"));
-        Directory.CreateDirectory(Path.Combine(resolvedDir, "files"));
+        Directory.CreateDirectory(targetDir);
+        Directory.CreateDirectory(Path.Combine(targetDir, "nodes"));
+        Directory.CreateDirectory(Path.Combine(targetDir, "services"));
+        Directory.CreateDirectory(Path.Combine(targetDir, "files"));
+        Directory.CreateDirectory(Path.Combine(targetDir, "domains"));
 
-        File.WriteAllText(Path.Combine(resolvedDir, "nodes", ".gitkeep"), string.Empty);
-        File.WriteAllText(Path.Combine(resolvedDir, "services", ".gitkeep"), string.Empty);
-        File.WriteAllText(Path.Combine(resolvedDir, "files", ".gitkeep"), string.Empty);
+        File.WriteAllText(Path.Combine(targetDir, "nodes", ".gitkeep"), string.Empty);
+        File.WriteAllText(Path.Combine(targetDir, "services", ".gitkeep"), string.Empty);
+        File.WriteAllText(Path.Combine(targetDir, "files", ".gitkeep"), string.Empty);
 
-        var gitignorePath = Path.Combine(resolvedDir, ".gitignore");
+        var gitignorePath = Path.Combine(targetDir, ".gitignore");
         if (!File.Exists(gitignorePath))
         {
             const string gitignoreContent = """
@@ -31,22 +38,41 @@ public static class RepositoryInitializer
             File.WriteAllText(gitignorePath, gitignoreContent);
         }
 
-        var mainConfigPath = Path.Combine(resolvedDir, "starry.yaml");
+        var mainConfigPath = Path.Combine(targetDir, "starry.yaml");
         if (!File.Exists(mainConfigPath))
         {
+            var clusterName = !string.IsNullOrWhiteSpace(projectName) ? projectName : "starry-fleet";
             var configContent = $"""
-                version: "1.0"
+                version: "3.0"
                 cluster_name: "{clusterName}"
 
                 mesh:
-                  cidr: "10.99.0.0/16"
+                  prefix: "fd67:b00b::/32"
                   port: 51820
                   keepalive: 25
                 """;
             File.WriteAllText(mainConfigPath, configContent);
         }
 
+        var portsPath = Path.Combine(targetDir, "ports.yaml");
+        if (!File.Exists(portsPath))
+        {
+            const string portsContent = """
+                ports: {}
+                """;
+            File.WriteAllText(portsPath, portsContent);
+        }
+
+        var volumesPath = Path.Combine(targetDir, "volumes.yaml");
+        if (!File.Exists(volumesPath))
+        {
+            const string volumesContent = """
+                volumes: {}
+                """;
+            File.WriteAllText(volumesPath, volumesContent);
+        }
+
         var masterKey = CryptoService.GenerateMasterKeyBase64();
-        return (masterKey, resolvedDir);
+        return (masterKey, targetDir);
     }
 }

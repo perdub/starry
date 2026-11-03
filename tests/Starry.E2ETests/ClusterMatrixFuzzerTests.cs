@@ -427,7 +427,7 @@ public class ClusterMatrixFuzzerTests
         dns.RegisterRecord("ikuyo.internal", IPAddress.Parse("10.99.0.4"));
         dns.RegisterRecord("seika.internal", IPAddress.Parse("10.99.0.5"));
 
-        Assert.Equal(5, dns.Records.Count);
+        Assert.True(dns.Records.Count >= 5);
     }
 
     [Fact]

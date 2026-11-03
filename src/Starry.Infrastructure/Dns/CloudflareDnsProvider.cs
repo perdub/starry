@@ -1,4 +1,5 @@
 using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json.Nodes;
 using Starry.Core.Dns;
 
@@ -124,6 +125,44 @@ public sealed class CloudflareDnsProvider : IDnsProvider
 
             postRes.EnsureSuccessStatusCode();
         }
+    }
+
+    public async Task ConfigureOriginRuleAsync(string zoneDomain, string hostname, int originPort, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(zoneDomain);
+        ArgumentException.ThrowIfNullOrWhiteSpace(hostname);
+
+        var zoneId = await ResolveZoneIdAsync(zoneDomain, ct).ConfigureAwait(false);
+
+        var payload = new JsonObject
+        {
+            ["rules"] = new JsonArray
+            {
+                new JsonObject
+                {
+                    ["expression"] = $"http.host eq \"{hostname}\"",
+                    ["description"] = $"Starry origin port rewrite to {originPort}",
+                    ["action"] = "route",
+                    ["action_parameters"] = new JsonObject
+                    {
+                        ["origin"] = new JsonObject
+                        {
+                            ["port"] = originPort
+                        }
+                    }
+                }
+            }
+        };
+
+        using var putRes = await SendWithRetryAsync(() =>
+        {
+            var req = new HttpRequestMessage(HttpMethod.Put, $"zones/{zoneId}/rulesets/phases/http_request_origin/entrypoint")
+            {
+                Content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json")
+            };
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiToken);
+            return req;
+        }, ct).ConfigureAwait(false);
     }
 
     public async Task DeleteRecordAsync(string zoneDomain, string recordId, CancellationToken ct = default)

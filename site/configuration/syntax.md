@@ -1,156 +1,112 @@
-# Архитектура и синтаксис конфигурации
+# Архитектура и синтаксис конфигурации (Starry v3.0)
 
-Starry использует передовую концепцию **Virtual Config Engine**: вы можете описывать инфраструктуру как единым файлом (`starry.yaml`), так и разбивать её на модульные папки и файлы любого удобного формата (**YAML**, **JSON**, **TOML**). Starry автоматически объединяет их в единое виртуальное дерево с полным сохранением карты источников (**Source Map**).
-
----
-
-## 1. Модульная организация файлов (Best Practices)
-
-### Для небольших кластеров (Single File)
-Если у вас 1–3 сервера, удобно хранить всю конфигурацию в одном корневом файле:
-
-```text
-my-fleet/
-├── starry.yaml
-└── .gitignore
-```
-
-### Для средних и крупных флотов (Modular Hierarchy)
-При росте количества серверов и сервисов рекомендуется модульная структура:
-
-```text
-cluster/
-├── starry.yaml               # Общие настройки кластера и сети mesh
-├── nodes/
-│   ├── bocchi.yaml           # Нода bocchi -> root.nodes.bocchi
-│   ├── nijika.json           # Нода nijika -> root.nodes.nijika
-│   └── ryo.toml              # Нода ryo -> root.nodes.ryo
-└── services/
-    ├── api.yaml              # Сервис api -> root.services.api
-    ├── database.toml         # Сервис database -> root.services.database
-    └── frontend.json         # Сервис frontend -> root.services.frontend
-```
-
-Starry маппит относительные пути файлов в канонические JSON-пути виртуального дерева:
-- `nodes/bocchi.yaml` автоматически монтируется в `root.nodes.bocchi`
-- `services/api.toml` автоматически монтируется в `root.services.api`
-- Файлы `starry.yaml` или `config.yaml` в корне объединяются с корнем дерева `root`
-
-Каждое терминальное значение сохраняет точную ссылку на файл, строку и колонку в **Source Map**, благодаря чему ошибки валидации указывают на конкретные исходные файлы!
+В версии **Starry v3.0** конфигурационный движок построен на базе чистой функциональной библиотеки **`Starry.Dsl`** (F#). Инфраструктура описывается как единый граф с поддержкой подстановки поддеревьев, наследования объектов через `$:` и интерполяции переменных и секретов.
 
 ---
 
-## 2. Поддержка форматов: YAML, JSON и TOML
+## 1. Унифицированный граф AST и организация файлов
 
-Вы можете свободно смешивать форматы в одном проекте! Ниже приведен один и тот же фрагмент конфигурации в трёх поддерживаемых форматах:
-
-::: code-group
-
-```yaml [YAML (nodes/bocchi.yaml)]
-host: "198.51.100.10"
-port: 22
-vpn_ip: "10.99.0.1"
-engine: "docker"
-packages:
-  - wireguard
-  - nftables
-  - curl
-```
-
-```toml [TOML (nodes/bocchi.toml)]
-host = "198.51.100.10"
-port = 22
-vpn_ip = "10.99.0.1"
-engine = "docker"
-packages = ["wireguard", "nftables", "curl"]
-```
-
-```json [JSON (nodes/bocchi.json)]
-{
-  "host": "198.51.100.10",
-  "port": 22,
-  "vpn_ip": "10.99.0.1",
-  "engine": "docker",
-  "packages": [
-    "wireguard",
-    "nftables",
-    "curl"
-  ]
-}
-```
-
-:::
+Любая папка и файл внутри директории конфигурации автоматически становятся узлом в едином иммутабельном AST:
+- **Структурированные файлы (`.yaml`, `.json`, `.toml`):** Парсятся и монтируются в соответствующую ветку графа (например, `nodes/germany.yaml` -> `root.nodes.germany`).
+- **Текстовые и конфигурационные файлы (`files/*`):** Любой текстовый файл (например, `files/nginx.conf` или `files/init.sql`) загружается в граф как `StringNode` под своим путем (`root.files.["nginx.conf"]`).
+- **Произвольные пользовательские ветки:** Вы можете создавать любые удобные секции (`presets`, `secrets`, `vars`, `dns_providers`, `backups`, `certs`) — валидатор не блокирует произвольные структуры.
 
 ---
 
-## 3. Схема и структура кластера
+## 2. Разрешение ссылок (`$`) и наследование (`$:`)
 
-Манифест кластера описывает узлы (`nodes`), оверлейную сеть (`mesh`), развертываемые сервисы (`services`) и политики резервного копирования:
+### Подстановка целых поддеревьев
+Если значение узла указывает на путь к объекту (например, `env: "$presets.db_env"`), Starry заменяет ссылку на глубокую копию целевого поддерева:
 
 ```yaml
-version: "1.0"
-cluster_name: "kessoku-prod"
+presets:
+  db_env:
+    POSTGRES_DB: "starry"
+    POSTGRES_USER: "admin"
+    POSTGRES_PASSWORD: "ENC[AES256_GCM:v1:...]"
 
-# Параметры WireGuard Mesh оверлея
-mesh:
-  cidr: "10.99.0.0/16"
-  port: 51820
-  keepalive: 25
+services:
+  database:
+    image: "postgres:16"
+    env: "$presets.db_env"
+```
 
-# Серверные узлы кластера
-nodes:
-  bocchi:
-    host: "198.51.100.10"
-    port: 22
-    vpn_ip: "10.99.0.1"
-    is_public: true
-    ssh_key: "ENC[AES256_GCM:v1:nonce:cipher:tag]"
+### Наследование и слияние объектов (`$:`)
+Через специальный ключ `"$"` сервис или узел может наследовать свойства одного или нескольких базовых пресетов:
 
-# Контейнерные сервисы
+```yaml
+presets:
+  base_service:
+    restart: "always"
+    priority: 50
+    networks: ["$networks.app_net"]
+
 services:
   web:
+    $: "$presets.base_service"
     image: "nginx:alpine"
-    node: "bocchi"
-    priority: 80
-    ports:
-      - "80:80"
-      - "443:443"
-    env:
-      DB_PASSWORD: "ENC[AES256_GCM:v1:nonce:cipher:tag]"
+    priority: 80 # Переопределяет priority из base_service
+```
+
+### Интерполяция строк и файлов
+Внутри любых строк (включая переменные окружения и текст файлов в `files/`) поддерживается синтаксис `$path.to.value` и `${path.to.value}`. При развертывании секреты автоматически расшифровываются.
+
+---
+
+## 3. Схема адресации IPv6 Mesh (`fd67:b00b::/32`) и реестр ID
+
+* **Префикс кластера:** `fd67:b00b::/32`.
+* **Подсеть узла (`/48`):** Каждому серверу выделяется статическая подсеть `fd67:b00b:<host_id>::/48`. В интерфейсе WireGuard `starry0` адрес равен `fd67:b00b:<host_id>::1/32`, а в пирах прописывается `AllowedIPs = fd67:b00b:<host_id>::/48`.
+* **Подсеть контейнера (`/64`):** Каждой реплике контейнера выделяется подсеть `fd67:b00b:<host_id>:<container_id>::/64`. Внутри контейнера работает ровно один сетевой интерфейс (`eth0`) с адресом `fd67:b00b:<host_id>:<container_id>::1/64`.
+* **Реестр ID (`.starry/id-ledger.json`):** При удалении сервиса или сервера их идентификаторы попадают в список `tombstoned` и **никогда не переиспользуются повторно**.
+
+---
+
+## 4. Именованные двунаправленные порты (`ports:`)
+
+Секция `ports:` задает именованные правила маршрутизации:
+
+```yaml
+ports:
+  shop_https_v4:
+    from: "$nodes.germany.ipv4:443"
+    to: "$ingress:443"
+    proto: "tcp"
+    bidirectional: true # Входящий DNAT + исходящий SNAT через IP ноды germany!
+
+  custom_proxy:
+    from: "$nodes.finland.ipv4:443"
+    to: "my-proxy:443"
 ```
 
 ---
 
-## 4. Команды управления конфигурацией (CLI)
+## 5. Встроенный Nginx Ingress (`$ingress`) и L4 SNI Proxy
 
-Starry предоставляет богатый набор встроенных утилит для инспекции и трансформации конфигов:
+* `$ingress` получает внутренний адрес `fd67:b00b:<host_id>:ffff::1` и не захватывает порт 443 на сервере без явного правила в `ports:`.
+* Входящий трафик обрабатывается через `stream { ssl_preread on; }`:
+  - Маршруты `sni: "<target>"` пробрасываются на Layer 4 без расшифровки TLS.
+  - Маршруты `http: "<target>"` направляются в блок `http {}` для терминации SSL и проксирования HTTP/WebSocket/gRPC.
 
-### Валидация (`starry config validate`)
-Проверяет структуру, существование обязательных полей, корректность сетевых адресов и синтаксис секретов:
-```bash
-starry config validate ./cluster
+---
+
+## 6. Иерархические домены (`domains:`) и Cloudflare Origin Rules
+
+```yaml
+domains:
+  rocks:
+    bocchi:
+      dns_provider: "$dns_providers.cf"
+      cert: "$certs.bocchi_wildcard"
+      node: "$nodes.germany"
+
+      "@":
+        http: "landing:80"
+      shop:
+        http: "shop-web:3000"
+      vpn:
+        sni: "xray:8443"
+        proxy_protocol: true
 ```
 
-### Упаковка в единый файл (`starry config pack`)
-Объединяет модульную директорию со всеми подпапками в один канонический файл:
-```bash
-starry config pack ./cluster -o starry.bundle.yaml --format yaml
-```
-
-### Разделение монолита на модули (`starry config split`)
-Автоматически разбивает монолитный `starry.yaml` на стандартную иерархию папок (`nodes/`, `services/`):
-```bash
-starry config split starry.bundle.yaml -o ./modular-config --format yaml
-```
-
-### Каноническое форматирование (`starry config fmt`)
-Форматирует конфигурационный файл в соответствии со стандартом:
-```bash
-starry config fmt cluster/nodes/bocchi.yaml
-```
-
-### Генерация JSON Schema (`starry config schema`)
-Генерирует официальную JSON Schema для валидации и автодополнения в VS Code, JetBrains Rider и Neovim:
-```bash
-starry config schema > starry.schema.json
-```
+Если порт входа в правиле `ports:` отличается от 443 (например, 8443), провайдер Cloudflare автоматически создает **Origin Rule** через Cloudflare Rulesets API для прозрачного проксирования на нужный порт!

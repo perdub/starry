@@ -12,6 +12,7 @@ using Starry.Infrastructure.Agent;
 using Starry.Infrastructure.Backups;
 using Starry.Infrastructure.Configuration;
 using Starry.Infrastructure.Localization;
+using Starry.Infrastructure.Network;
 using Starry.Infrastructure.Nodes;
 using Starry.Infrastructure.Orchestration;
 using Starry.Infrastructure.Processes;
@@ -127,6 +128,7 @@ internal static class Program
             "ENCRYPT" => HandleEncryptCommand(commandArgs),
             "NODES" => HandleNodesCommand(commandArgs, localizer),
             "ROTATE-KEYS" => HandleRotateKeysDirectCommand(commandArgs),
+            "NET" => HandleNetCommandAsync(commandArgs),
             "PLAN" => HandlePlanCommand(commandArgs),
             "APPLY" => HandleApplyCommand(commandArgs),
             "AGENT" => HandleAgentCommandAsync(commandArgs),
@@ -138,12 +140,12 @@ internal static class Program
 
     private static int HandleInitCommand(string[] args)
     {
-        var targetPath = ResolveTargetPath(args);
-        var clusterName = ExtractOptionValue(args, "--name") ?? "starry-fleet";
+        var projectName = args.FirstOrDefault(a => !a.StartsWith('-'));
+        var skipFolder = args.Any(a => string.Equals(a, "--skip-folder-create", StringComparison.OrdinalIgnoreCase));
 
         try
         {
-            var (masterKey, dir) = RepositoryInitializer.Initialize(targetPath, clusterName);
+            var (masterKey, dir) = RepositoryInitializer.Initialize(projectName, skipFolder);
             AnsiConsole.MarkupLine($"[bold green]✓ Initialized Starry GitOps repository in '{Markup.Escape(dir)}'![/]");
             AnsiConsole.MarkupLine($"[yellow]Generated master encryption key:[/] [bold green]{masterKey}[/]");
             AnsiConsole.MarkupLine("[grey]Export this key into your environment: export STARRY_MASTER_KEY=\"...\"[/]");
@@ -833,8 +835,95 @@ internal static class Program
             return await ExecuteNodesRotateKeysAsync(subArgs).ConfigureAwait(false);
         }
 
+        if (string.Equals(subCommand, "interfaces", StringComparison.OrdinalIgnoreCase))
+        {
+            return await ExecuteNetInterfacesAsync(subArgs).ConfigureAwait(false);
+        }
+
         AnsiConsole.MarkupLine($"[yellow]starry nodes[/] - [grey]{Markup.Escape(localizer.GetString(LocalizationKeys.NodesCommandDescription))}[/]");
         return 0;
+    }
+
+    private static async Task<int> HandleNetCommandAsync(string[] args)
+    {
+        var subCommand = args.Length > 0 ? args[0] : "interfaces";
+        var subArgs = args.Length > 1 ? args[1..] : Array.Empty<string>();
+
+        if (string.Equals(subCommand, "interfaces", StringComparison.OrdinalIgnoreCase))
+        {
+            return await ExecuteNetInterfacesAsync(subArgs).ConfigureAwait(false);
+        }
+
+        AnsiConsole.MarkupLine("[red]Usage: starry net interfaces [--config <path>] [--verify][/]");
+        return 1;
+    }
+
+    private static async Task<int> ExecuteNetInterfacesAsync(string[] args)
+    {
+        var configPath = ExtractOptionValue(args, "--config") ?? ".";
+        var verify = args.Any(a => string.Equals(a, "--verify", StringComparison.OrdinalIgnoreCase));
+
+        try
+        {
+            var engine = new VirtualConfigEngine();
+            var tree = engine.Load(configPath);
+            var orchestrator = new ClusterOrchestrator();
+            var nodes = await orchestrator.ResolveNodesAsync(tree).ConfigureAwait(false);
+
+            try
+            {
+                var ledger = new IdLedgerService(configPath);
+                var table = new Table().Border(TableBorder.Rounded);
+                table.AddColumn("[bold]Node & Host ID[/]");
+                table.AddColumn("[bold]Interface[/]");
+                table.AddColumn("[bold]IPv4 Addresses[/]");
+                table.AddColumn("[bold]IPv6 Subnets / Addresses[/]");
+                table.AddColumn("[bold]Classification / Verification[/]");
+
+                foreach (var node in nodes)
+                {
+                    var hostId = ledger.AllocateHostId(node.NodeName);
+                    var report = await NodeNetworkInspector.InspectNodeAsync(node, hostId, verify).ConfigureAwait(false);
+
+                    foreach (var iface in report.Interfaces)
+                    {
+                        var statusMarkup = iface.Classification switch
+                        {
+                            InterfaceClassification.DedicatedPublic => "[green]DEDICATED PUBLIC[/]",
+                            InterfaceClassification.RoutedIpv6Subnet => "[cyan]ROUTED /64 SUBNET[/]",
+                            InterfaceClassification.BehindNatOrCgnat => "[yellow]BEHIND NAT / CGNAT[/]",
+                            InterfaceClassification.Firewalled => "[red]FIREWALLED[/]",
+                            _ => "[grey]INTERNAL ONLY[/]"
+                        };
+
+                        var v4 = iface.Ipv4Addresses.Count > 0 ? string.Join("\n", iface.Ipv4Addresses) : "-";
+                        var v6 = iface.Ipv6Addresses.Count > 0 ? string.Join("\n", iface.Ipv6Addresses) : "-";
+
+                        table.AddRow(
+                            $"{report.NodeName}\n[grey]{report.MeshIpv6}[/]",
+                            iface.InterfaceName,
+                            v4,
+                            v6,
+                            statusMarkup);
+                    }
+                }
+
+                AnsiConsole.Write(table);
+                return 0;
+            }
+            finally
+            {
+                foreach (var n in nodes)
+                {
+                    await n.DisposeAsync().ConfigureAwait(false);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]Network inspection failed: {Markup.Escape(ex.Message)}[/]");
+            return 1;
+        }
     }
 
     private static async Task<int> ExecuteNodesListAsync(string[] args)
@@ -1161,14 +1250,6 @@ internal static class Program
         var subCommand = args.Length > 0 ? args[0] : "help";
         if (string.Equals(subCommand, "open", StringComparison.OrdinalIgnoreCase))
         {
-            if (args.Length < 3)
-            {
-                AnsiConsole.MarkupLine("[red]Usage: starry volume open <node> <volumePath> [--config <path>] [--once][/]");
-                return 1;
-            }
-
-            var nodeName = args[1];
-            var volumePath = args[2];
             var configPath = ExtractOptionValue(args, "--config") ?? ".";
             var once = args.Any(a => string.Equals(a, "--once", StringComparison.OrdinalIgnoreCase));
 
@@ -1177,6 +1258,26 @@ internal static class Program
                 var engine = new VirtualConfigEngine();
                 var tree = engine.Load(configPath);
                 var orchestrator = new ClusterOrchestrator();
+
+                string nodeName;
+                string volumePath;
+
+                if (args.Length >= 2 && tree.Root["volumes"]?[args[1]] is JsonObject volObj)
+                {
+                    nodeName = volObj["node"]?.ToString() ?? "node-1";
+                    volumePath = volObj["path"]?.ToString() ?? $"/var/lib/docker/volumes/{args[1]}/_data";
+                }
+                else if (args.Length >= 3)
+                {
+                    nodeName = args[1];
+                    volumePath = args[2];
+                }
+                else
+                {
+                    AnsiConsole.MarkupLine("[red]Usage: starry volume open <volume_name | node volumePath> [--config <path>] [--once][/]");
+                    return 1;
+                }
+
                 var nodeObj = tree.Root["nodes"]?[nodeName] as JsonObject
                     ?? throw new InvalidOperationException($"Node '{nodeName}' not found in configuration.");
 
