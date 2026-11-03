@@ -1410,35 +1410,49 @@ public sealed partial class ClusterOrchestrator
 
             if (string.IsNullOrEmpty(fromStr) || string.IsNullOrEmpty(toStr)) continue;
 
-            var fromColon = fromStr.LastIndexOf(':');
-            if (fromColon <= 0 || !int.TryParse(fromStr[(fromColon + 1)..], CultureInfo.InvariantCulture, out var hostPort))
+            var rule = BuildNamedPortRule(config, fromStr, toStr, proto, publicPorts);
+            if (rule != null)
             {
-                continue;
+                forwards.Add(rule);
             }
-
-            publicPorts.Add(hostPort);
-
-            var toColon = toStr.LastIndexOf(':');
-            var targetHost = toColon > 0 ? toStr[..toColon] : toStr;
-            var targetPort = toColon > 0 && int.TryParse(toStr[(toColon + 1)..], CultureInfo.InvariantCulture, out var tp) ? tp : hostPort;
-
-            var targetVip = targetHost;
-            if (targetHost.StartsWith("$ingress", StringComparison.OrdinalIgnoreCase) || string.Equals(targetHost, "ingress", StringComparison.OrdinalIgnoreCase))
-            {
-                targetVip = "fd67:b00b:0001:ffff::1";
-            }
-            else if (config.Root["services"]?[targetHost] is JsonObject targetSvc)
-            {
-                targetVip = targetSvc["vip"]?.ToString() ?? targetHost;
-            }
-
-            forwards.Add(new PortForwardRule(
-                HostPort: hostPort,
-                Protocol: proto,
-                TargetVip: targetVip,
-                TargetPort: targetPort,
-                AddressFamily: fromStr.Contains("ipv6", StringComparison.OrdinalIgnoreCase) ? "ipv6" : (fromStr.Contains("ipv4", StringComparison.OrdinalIgnoreCase) ? "ipv4" : "any")));
         }
+    }
+
+    private static PortForwardRule? BuildNamedPortRule(
+        ConfigTree config,
+        string fromStr,
+        string toStr,
+        string proto,
+        HashSet<int> publicPorts)
+    {
+        var fromColon = fromStr.LastIndexOf(':');
+        if (fromColon <= 0 || !int.TryParse(fromStr[(fromColon + 1)..], CultureInfo.InvariantCulture, out var hostPort))
+        {
+            return null;
+        }
+
+        publicPorts.Add(hostPort);
+
+        var toColon = toStr.LastIndexOf(':');
+        var targetHost = toColon > 0 ? toStr[..toColon] : toStr;
+        var targetPort = toColon > 0 && int.TryParse(toStr[(toColon + 1)..], CultureInfo.InvariantCulture, out var tp) ? tp : hostPort;
+
+        var targetVip = targetHost;
+        if (targetHost.StartsWith("$ingress", StringComparison.OrdinalIgnoreCase) || string.Equals(targetHost, "ingress", StringComparison.OrdinalIgnoreCase))
+        {
+            targetVip = "fd67:b00b:0001:ffff::1";
+        }
+        else if (config.Root["services"]?[targetHost] is JsonObject targetSvc)
+        {
+            targetVip = targetSvc["vip"]?.ToString() ?? targetHost;
+        }
+
+        return new PortForwardRule(
+            HostPort: hostPort,
+            Protocol: proto,
+            TargetVip: targetVip,
+            TargetPort: targetPort,
+            AddressFamily: fromStr.Contains("ipv6", StringComparison.OrdinalIgnoreCase) ? "ipv6" : (fromStr.Contains("ipv4", StringComparison.OrdinalIgnoreCase) ? "ipv4" : "any"));
     }
 
     private static void ParseServicePortForwards(
