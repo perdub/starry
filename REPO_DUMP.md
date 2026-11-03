@@ -3,8 +3,8 @@
 ## Overview
 
 - **Total Files**: 141
-- **Total Lines of Code**: 19006
-- **Total Size**: 714.1 KB
+- **Total Lines of Code**: 19007
+- **Total Size**: 714.3 KB
 - **Root Directory**: `/root/src/starry`
 
 ## Repository Structure
@@ -18735,7 +18735,7 @@ public class ClusterMatrixFuzzerTests
 
 ## File: tests/Starry.E2ETests/LiveDockerSshClusterFixture.cs
 
-**Lines**: 178 | **Size**: 5.8 KB | **Language**: csharp
+**Lines**: 179 | **Size**: 6.0 KB | **Language**: csharp
 
 ```csharp
 using System.Diagnostics;
@@ -18748,7 +18748,7 @@ namespace Starry.E2ETests;
 /// Sets up a live multi-node Linux SSH cluster running inside isolated Docker containers
 /// for testing real SSH transport, ControlMaster multiplexing, volume streaming, and key rotation.
 /// </summary>
-public sealed class LiveDockerSshClusterFixture : IAsyncDisposable
+internal sealed class LiveDockerSshClusterFixture : IAsyncDisposable
 {
     private static readonly ProcessRunner Runner = new();
     private readonly string _tempKeyDir = Path.Combine(Path.GetTempPath(), $"starry-e2e-keys-{Guid.NewGuid():N}");
@@ -18760,6 +18760,7 @@ public sealed class LiveDockerSshClusterFixture : IAsyncDisposable
     public SshNodeConnection? Node1 { get; private set; }
     public SshNodeConnection? Node2 { get; private set; }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "Gracefully check for docker daemon availability")]
     public async Task InitializeAsync()
     {
         // 1. Check if Docker daemon is responsive
