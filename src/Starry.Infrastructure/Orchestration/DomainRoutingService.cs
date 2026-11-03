@@ -9,23 +9,13 @@ using Starry.Infrastructure.Dns;
 
 namespace Starry.Infrastructure.Orchestration;
 
-public sealed record ResolvedDomainRoute(
-    string FullHostname,
-    string ZoneDomain,
-    string? HttpTarget,
-    string? SniTarget,
-    bool ProxyProtocol,
-    string? TargetNode,
-    string? DnsProviderKey,
-    int EntryPort);
-
 /// <summary>
 /// Traverses hierarchical domains graph (TLD -> domain -> subdomains), resolving inherited properties,
 /// Cloudflare Origin Rules, and Nginx L4 SNI / L7 reverse-proxy routes.
 /// </summary>
 public static class DomainRoutingService
 {
-    public static List<ResolvedDomainRoute> TraverseDomains(ConfigTree config)
+    public static IReadOnlyList<ResolvedDomainRoute> TraverseDomains(ConfigTree config)
     {
         ArgumentNullException.ThrowIfNull(config);
 

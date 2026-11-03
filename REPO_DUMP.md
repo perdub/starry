@@ -2,8 +2,8 @@
 
 ## Overview
 
-- **Total Files**: 159
-- **Total Lines of Code**: 22149
+- **Total Files**: 160
+- **Total Lines of Code**: 22150
 - **Total Size**: 840.3 KB
 - **Root Directory**: `/root/src/starry`
 
@@ -163,7 +163,8 @@ starry/
 │       │   ├── MigrationPlan.cs
 │       │   ├── MigrationPlanner.cs
 │       │   ├── PlanAction.cs
-│       │   └── PlanActionType.cs
+│       │   ├── PlanActionType.cs
+│       │   └── ResolvedDomainRoute.cs
 │       ├── Packaging/
 │       │   ├── ApkPackageManager.cs
 │       │   ├── AptPackageManager.cs
@@ -17288,7 +17289,7 @@ public sealed partial class ClusterOrchestrator
 
 ## File: src/Starry.Infrastructure/Orchestration/DomainRoutingService.cs
 
-**Lines**: 241 | **Size**: 8.4 KB | **Language**: csharp
+**Lines**: 231 | **Size**: 8.2 KB | **Language**: csharp
 
 ```csharp
 using System.Globalization;
@@ -17302,23 +17303,13 @@ using Starry.Infrastructure.Dns;
 
 namespace Starry.Infrastructure.Orchestration;
 
-public sealed record ResolvedDomainRoute(
-    string FullHostname,
-    string ZoneDomain,
-    string? HttpTarget,
-    string? SniTarget,
-    bool ProxyProtocol,
-    string? TargetNode,
-    string? DnsProviderKey,
-    int EntryPort);
-
 /// <summary>
 /// Traverses hierarchical domains graph (TLD -> domain -> subdomains), resolving inherited properties,
 /// Cloudflare Origin Rules, and Nginx L4 SNI / L7 reverse-proxy routes.
 /// </summary>
 public static class DomainRoutingService
 {
-    public static List<ResolvedDomainRoute> TraverseDomains(ConfigTree config)
+    public static IReadOnlyList<ResolvedDomainRoute> TraverseDomains(ConfigTree config)
     {
         ArgumentNullException.ThrowIfNull(config);
 
@@ -18733,6 +18724,24 @@ public enum PlanActionType
     MigrateServiceBlueGreen,
     UpdateDns
 }
+```
+
+## File: src/Starry.Infrastructure/Orchestration/ResolvedDomainRoute.cs
+
+**Lines**: 11 | **Size**: 281 B | **Language**: csharp
+
+```csharp
+namespace Starry.Infrastructure.Orchestration;
+
+public sealed record ResolvedDomainRoute(
+    string FullHostname,
+    string ZoneDomain,
+    string? HttpTarget,
+    string? SniTarget,
+    bool ProxyProtocol,
+    string? TargetNode,
+    string? DnsProviderKey,
+    int EntryPort);
 ```
 
 ## File: src/Starry.Infrastructure/Packaging/ApkPackageManager.cs
