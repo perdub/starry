@@ -551,6 +551,21 @@ def main() -> int:
         default=True,
         help="Include visual ASCII directory tree in output (default: True)",
     )
+    parser.add_argument(
+        "--telegram",
+        action="store_true",
+        help="Send generated dump directly to Telegram (uses TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)",
+    )
+    parser.add_argument(
+        "--telegram-token",
+        default=os.environ.get("TELEGRAM_BOT_TOKEN"),
+        help="Telegram Bot API Token",
+    )
+    parser.add_argument(
+        "--telegram-chat-id",
+        default=os.environ.get("TELEGRAM_CHAT_ID"),
+        help="Telegram Chat ID",
+    )
 
     args = parser.parse_args()
 
@@ -670,7 +685,69 @@ def main() -> int:
             out.write(f"{fence}\n\n")
 
     print(f"Repository dump generated successfully at: {output_path}")
+
+    if args.telegram:
+        token = args.telegram_token or os.environ.get("TELEGRAM_BOT_TOKEN")
+        chat_id = args.telegram_chat_id or os.environ.get("TELEGRAM_CHAT_ID")
+        if token and chat_id:
+            print(f"Sending repository dump to Telegram chat {chat_id}...")
+            if send_telegram(output_path, token, chat_id, f"🌟 STARRY Repository Dump ({output_path.name})"):
+                print("Successfully sent dump to Telegram!")
+            else:
+                print("Failed to send dump to Telegram.")
+        else:
+            sys.stderr.write("Telegram token or chat ID not set. Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID.\n")
+
     return 0
+
+
+def send_telegram(file_path: Path, token: str, chat_id: str, caption: str = "📦 STARRY Repository Dump") -> bool:
+    import urllib.request
+    import uuid
+
+    boundary = f"----WebKitFormBoundary{uuid.uuid4().hex}"
+    body = []
+
+    # chat_id field
+    body.append(f"--{boundary}".encode("utf-8"))
+    body.append(b'Content-Disposition: form-data; name="chat_id"')
+    body.append(b"")
+    body.append(str(chat_id).encode("utf-8"))
+
+    # caption field
+    body.append(f"--{boundary}".encode("utf-8"))
+    body.append(b'Content-Disposition: form-data; name="caption"')
+    body.append(b"")
+    body.append(caption.encode("utf-8"))
+
+    # document field
+    filename = file_path.name
+    content_type = "text/markdown"
+    body.append(f"--{boundary}".encode("utf-8"))
+    body.append(f'Content-Disposition: form-data; name="document"; filename="{filename}"'.encode("utf-8"))
+    body.append(f"Content-Type: {content_type}".encode("utf-8"))
+    body.append(b"")
+    body.append(file_path.read_bytes())
+
+    body.append(f"--{boundary}--".encode("utf-8"))
+    body.append(b"")
+
+    payload = b"\r\n".join(body)
+
+    url = f"https://api.telegram.org/bot{token}/sendDocument"
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            resp.read()
+            return True
+    except Exception as ex:
+        sys.stderr.write(f"Failed to send dump to Telegram: {ex}\n")
+        return False
 
 
 if __name__ == "__main__":

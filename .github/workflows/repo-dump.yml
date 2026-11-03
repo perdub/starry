@@ -36,3 +36,21 @@ jobs:
         with:
           name: repo-dump
           path: ${{ inputs.output_filename || 'REPO_DUMP.md' }}
+
+      - name: Send Dump to Telegram
+        if: env.TELEGRAM_BOT_TOKEN != '' && env.TELEGRAM_CHAT_ID != ''
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          FILENAME: ${{ inputs.output_filename || 'REPO_DUMP.md' }}
+        run: |
+          COMMIT_MSG=$(git log -1 --pretty=%B | head -n 1)
+          CAPTION="🌟 STARRY Repository Dump
+          🔨 Commit: ${{ github.sha }}
+          📝 Message: ${COMMIT_MSG}
+          👤 Author: ${{ github.actor }}"
+
+          curl -s -F chat_id="${TELEGRAM_CHAT_ID}" \
+               -F caption="${CAPTION}" \
+               -F document=@"${FILENAME}" \
+               https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument
