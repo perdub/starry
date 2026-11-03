@@ -3,8 +3,8 @@
 ## Overview
 
 - **Total Files**: 160
-- **Total Lines of Code**: 22178
-- **Total Size**: 841.2 KB
+- **Total Lines of Code**: 22184
+- **Total Size**: 841.1 KB
 - **Root Directory**: `/root/src/starry`
 
 ## Repository Structure
@@ -15683,7 +15683,7 @@ public sealed record SshNodeOptions
 
 ## File: src/Starry.Infrastructure/Orchestration/ClusterOrchestrator.cs
 
-**Lines**: 1627 | **Size**: 61.6 KB | **Language**: csharp
+**Lines**: 1633 | **Size**: 61.5 KB | **Language**: csharp
 
 ```csharp
 using System.Globalization;
@@ -16473,49 +16473,55 @@ public sealed partial class ClusterOrchestrator
     private Dictionary<string, string> ExtractServiceFiles(string serviceName, JsonObject serviceObj, ConfigTree? config = null)
     {
         var result = new Dictionary<string, string>(StringComparer.Ordinal);
-        if (serviceObj["files"] is JsonObject filesObj)
+        if (serviceObj["files"] is not JsonObject filesObj)
         {
-            foreach (var (destPath, contentVal) in filesObj)
+            return result;
+        }
+
+        foreach (var (destPath, contentVal) in filesObj)
+        {
+            var raw = contentVal?.ToString() ?? string.Empty;
+            var fileContent = ResolveFileRawContent(serviceName, destPath, raw, config);
+
+            if (config != null)
             {
-                var raw = contentVal?.ToString() ?? string.Empty;
-                var fileContent = raw;
-
-                if (raw.StartsWith("$files.", StringComparison.OrdinalIgnoreCase) && config != null)
-                {
-                    var fileKey = raw.Substring("$files.".Length).TrimStart('[').TrimEnd(']').Trim('\'', '"');
-                    var fromConfig = config.Root["files"]?[fileKey]?.ToString() ?? config.FindNode(raw.Substring(1))?.ToString();
-                    if (!string.IsNullOrEmpty(fromConfig))
-                    {
-                        fileContent = fromConfig;
-                    }
-                }
-                else if (File.Exists(raw))
-                {
-                    fileContent = File.ReadAllText(raw);
-                }
-                else
-                {
-                    var fallback = Path.Combine("files", serviceName, Path.GetFileName(destPath));
-                    if (File.Exists(fallback))
-                    {
-                        fileContent = File.ReadAllText(fallback);
-                    }
-                }
-
-                if (config != null)
-                {
-                    fileContent = RenderTemplateAndDecryptInlineSecrets(fileContent, config, $"services.{serviceName}.files.{destPath}");
-                }
-                else
-                {
-                    fileContent = DecryptSecretString(fileContent, $"services.{serviceName}.files.{destPath}");
-                }
-
-                result[destPath] = fileContent;
+                fileContent = RenderTemplateAndDecryptInlineSecrets(fileContent, config, $"services.{serviceName}.files.{destPath}");
             }
+            else
+            {
+                fileContent = DecryptSecretString(fileContent, $"services.{serviceName}.files.{destPath}");
+            }
+
+            result[destPath] = fileContent;
         }
 
         return result;
+    }
+
+    private static string ResolveFileRawContent(string serviceName, string destPath, string raw, ConfigTree? config)
+    {
+        if (raw.StartsWith("$files.", StringComparison.OrdinalIgnoreCase) && config != null)
+        {
+            var fileKey = raw.Substring("$files.".Length).TrimStart('[').TrimEnd(']').Trim('\'', '"');
+            var fromConfig = config.Root["files"]?[fileKey]?.ToString() ?? config.FindNode(raw.Substring(1))?.ToString();
+            if (!string.IsNullOrEmpty(fromConfig))
+            {
+                return fromConfig;
+            }
+        }
+
+        if (File.Exists(raw))
+        {
+            return File.ReadAllText(raw);
+        }
+
+        var fallback = Path.Combine("files", serviceName, Path.GetFileName(destPath));
+        if (File.Exists(fallback))
+        {
+            return File.ReadAllText(fallback);
+        }
+
+        return raw;
     }
 
     [GeneratedRegex(@"from '(?<old>[^']+)' to '(?<new>[^']+)'", RegexOptions.None, matchTimeoutMilliseconds: 1000)]
