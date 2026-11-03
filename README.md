@@ -23,9 +23,12 @@
 **`starry`** is an autonomous, single-binary GitOps orchestrator designed to run across heterogeneous cloud providers and low-cost virtual private servers (including NAT-isolated nodes and servers with small 10–20 GB SSDs).
 
 It manages the entire lifecycle of:
-* **Container Runtimes**: Direct Unix Domain Socket control of **Docker Engine** and **Podman** (Rootful & unprivileged Rootless).
-* **Encrypted Mesh Networking**: P2P **WireGuard** (`starry0`) with automated NAT traversal (`PersistentKeepalive = 25`) and Roaming Container VIPs (`10.99.x.x`).
-* **Host Firewalls & NAT**: Isolated table `inet starry` in **`nftables`** for atomic DNAT port forwarding and strict packet filtering.
+* **Container Runtimes**: Direct Unix Domain Socket control of **Docker Engine** and **Podman** (Rootful & unprivileged Rootless) supporting full Docker Compose specifications (capabilities, sysctls, shm_size, memory limits, and networks).
+* **Encrypted IPv6 Mesh Networking**: P2P **WireGuard** (`starry0`) running on the ULA prefix **`fd67:b00b::/32`**, assigning each host a `/48` subnet and each container replica a dedicated `/64` subnet with zero-downtime routing.
+* **Functional Configuration Engine (`Starry.Dsl`)**: Pure F# unified graph AST supporting whole-subtree substitution (`$`), object inheritance (`$:`), and automatic `files/*` text mounting.
+* **Host Firewalls & NAT**: Isolated table `inet starry` in **`nftables`** for atomic DNAT port forwarding, inter-container network ACL isolation, and symmetric outbound SNAT.
+* **Scoped Internal DNS**: Embedded DNS server (`fd67:b00b:<host_id>::1`) with source-aware ACL isolation, round-robin replica load-balancing, and egress policy enforcement.
+* **Managed Ingress & L4 SNI Proxy**: Nginx with `stream { ssl_preread on; }` for Layer 4 TLS passthrough, Layer 7 SSL termination, and automated Cloudflare Origin Rules.
 * **Operating System Packages**: Unified abstraction across **Apt** (Debian/Ubuntu), **Dnf** (RHEL/AlmaLinux/Rocky/Fedora), **Apk** (Alpine), and **Pacman** (Arch Linux) with rolling security updates.
 * **Security & Secret Management**: In-repository encrypted secrets using **AES-256-GCM** bound to canonical JSON paths with **AAD (Additional Authenticated Data)** to block cut-and-paste tampering.
 * **Zero-Disk Streaming Backups**: Real-time volume backups via `tar | zstd | rclone rcat` without creating intermediate files on constrained VPS disks.
@@ -119,9 +122,12 @@ starry apply --config ./cluster
 | `starry nodes rotate-keys` | Generate fresh Ed25519 SSH keys and update remote `authorized_keys`. |
 | `starry plan` | Generate and visualize DAG migration graph with colored icons. |
 | `starry apply` | Execute planned actions across the cluster fleet. |
-| `starry volume open <node> <vol>` | Open remote container volume via secure SFTP tunnel. |
+| `starry net interfaces [--verify]` | Inspect and verify network interfaces, IPv4/IPv6, and NAT status. |
+| `starry volume open <volume>` | Open remote container volume via secure SFTP tunnel. |
 | `starry bundle export -o <archive>` | Export entire fleet into a disaster recovery capsule. |
 | `starry bundle import <archive>` | Restore fleet capsule with optional `--override-ip` mappings. |
+| `starry adopt <user@host:port>` | Brownfield zero-downtime adoption of existing Docker/Podman servers. |
+| `starry unmanaged list` | List unmanaged containers running outside Starry GitOps. |
 
 ---
 

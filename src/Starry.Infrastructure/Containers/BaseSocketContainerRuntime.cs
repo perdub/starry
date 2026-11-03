@@ -283,7 +283,6 @@ public abstract class BaseSocketContainerRuntime : IContainerRuntime
             binds.Add(JsonValue.Create(vol));
         }
 
-        // Mount dynamic files directory
         if (spec.Files.Count > 0)
         {
             var baseDir = $"/var/lib/starry/files/{spec.Name}";
@@ -308,6 +307,7 @@ public abstract class BaseSocketContainerRuntime : IContainerRuntime
         labels["starry.priority"] = spec.Priority.ToString(CultureInfo.InvariantCulture);
 
         var (exposedPorts, portBindings) = BuildPortConfigurations(spec.Ports);
+        var hostConfig = BuildHostConfig(spec, binds, portBindings);
 
         var payload = new JsonObject
         {
@@ -315,15 +315,81 @@ public abstract class BaseSocketContainerRuntime : IContainerRuntime
             ["Env"] = env,
             ["Labels"] = labels,
             ["ExposedPorts"] = exposedPorts,
-            ["HostConfig"] = new JsonObject
-            {
-                ["Binds"] = binds,
-                ["PortBindings"] = portBindings,
-                ["RestartPolicy"] = new JsonObject { ["Name"] = "unless-stopped" }
-            }
+            ["HostConfig"] = hostConfig
         };
 
+        if (!string.IsNullOrEmpty(spec.Command))
+        {
+            payload["Cmd"] = new JsonArray(JsonValue.Create("sh"), JsonValue.Create("-c"), JsonValue.Create(spec.Command));
+        }
+        if (!string.IsNullOrEmpty(spec.WorkingDir)) payload["WorkingDir"] = spec.WorkingDir;
+        if (!string.IsNullOrEmpty(spec.User)) payload["User"] = spec.User;
+        if (!string.IsNullOrEmpty(spec.Hostname)) payload["Hostname"] = spec.Hostname;
+        if (!string.IsNullOrEmpty(spec.Domainname)) payload["Domainname"] = spec.Domainname;
+        if (!string.IsNullOrEmpty(spec.StopSignal)) payload["StopSignal"] = spec.StopSignal;
+        if (spec.StopGracePeriod.HasValue) payload["StopTimeout"] = spec.StopGracePeriod.Value;
+
         return payload;
+    }
+
+    private static JsonObject BuildHostConfig(ServiceSpec spec, JsonArray binds, JsonObject portBindings)
+    {
+        var hostConfig = new JsonObject
+        {
+            ["Binds"] = binds,
+            ["PortBindings"] = portBindings,
+            ["RestartPolicy"] = new JsonObject { ["Name"] = spec.Restart },
+            ["Privileged"] = spec.Privileged
+        };
+
+        if (spec.CapAdd.Count > 0)
+        {
+            var capAdd = new JsonArray();
+            foreach (var c in spec.CapAdd) capAdd.Add(JsonValue.Create(c));
+            hostConfig["CapAdd"] = capAdd;
+        }
+
+        if (spec.CapDrop.Count > 0)
+        {
+            var capDrop = new JsonArray();
+            foreach (var c in spec.CapDrop) capDrop.Add(JsonValue.Create(c));
+            hostConfig["CapDrop"] = capDrop;
+        }
+
+        if (!string.IsNullOrEmpty(spec.NetworkMode)) hostConfig["NetworkMode"] = spec.NetworkMode;
+        if (spec.ShmSize.HasValue) hostConfig["ShmSize"] = spec.ShmSize.Value;
+
+        var memBytes = ParseMemoryLimitBytes(spec.MemLimit);
+        if (memBytes.HasValue) hostConfig["Memory"] = memBytes.Value;
+
+        if (spec.Cpus.HasValue)
+        {
+            hostConfig["NanoCpus"] = (long)(spec.Cpus.Value * 1_000_000_000);
+        }
+
+        if (spec.Sysctls.Count > 0)
+        {
+            var sysctls = new JsonObject();
+            foreach (var (k, v) in spec.Sysctls) sysctls[k] = v;
+            hostConfig["Sysctls"] = sysctls;
+        }
+
+        return hostConfig;
+    }
+
+    private static long? ParseMemoryLimitBytes(string? memLimit)
+    {
+        if (string.IsNullOrWhiteSpace(memLimit)) return null;
+        var trimmed = memLimit.Trim();
+        if (trimmed.EndsWith("g", StringComparison.OrdinalIgnoreCase) && long.TryParse(trimmed[..^1], CultureInfo.InvariantCulture, out var g))
+            return g * 1024 * 1024 * 1024;
+        if (trimmed.EndsWith("m", StringComparison.OrdinalIgnoreCase) && long.TryParse(trimmed[..^1], CultureInfo.InvariantCulture, out var m))
+            return m * 1024 * 1024;
+        if (trimmed.EndsWith("k", StringComparison.OrdinalIgnoreCase) && long.TryParse(trimmed[..^1], CultureInfo.InvariantCulture, out var k))
+            return k * 1024;
+        if (long.TryParse(trimmed, CultureInfo.InvariantCulture, out var b))
+            return b;
+        return null;
     }
 
     private static (JsonObject ExposedPorts, JsonObject PortBindings) BuildPortConfigurations(IReadOnlyList<string> ports)

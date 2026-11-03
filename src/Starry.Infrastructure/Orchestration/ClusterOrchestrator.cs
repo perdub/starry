@@ -118,9 +118,21 @@ public sealed partial class ClusterOrchestrator
             ? p
             : 22;
         var user = nodeObj["user"]?.ToString() ?? "root";
+
+        if (nodeObj.TryGetPropertyValue("ssh", out var sshVal) && sshVal != null)
+        {
+            var sshStr = sshVal.ToString();
+            var (parsedUser, parsedHost, parsedPort) = ParseSshString(sshStr);
+            if (!string.IsNullOrEmpty(parsedHost))
+            {
+                host = parsedHost;
+                user = parsedUser;
+                port = parsedPort;
+            }
+        }
         var sshKey = nodeObj["ssh_key"]?.ToString();
         var jumpHost = nodeObj["jump_host"]?.ToString();
-        var isLocalFlag = nodeObj["is_local"]?.GetValue<bool>() ?? false;
+        var isLocalFlag = bool.TryParse(nodeObj["is_local"]?.ToString(), out var ilb) && ilb;
 
         var isLocalHost = string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase) ||
                           string.Equals(host, DefaultLocalIp, StringComparison.Ordinal) ||
@@ -154,6 +166,32 @@ public sealed partial class ClusterOrchestrator
         var ssh = new SshNodeConnection(sshOptions, _processRunner);
         await ssh.InitializeAsync(ct).ConfigureAwait(false);
         return ssh;
+    }
+
+    private static (string User, string Host, int Port) ParseSshString(string input)
+    {
+        var user = "root";
+        var host = input.Trim();
+        var port = 22;
+
+        if (host.Contains('@', StringComparison.Ordinal))
+        {
+            var atParts = host.Split('@', 2);
+            user = atParts[0];
+            host = atParts[1];
+        }
+
+        if (host.Contains(':', StringComparison.Ordinal))
+        {
+            var colonParts = host.Split(':', 2);
+            host = colonParts[0];
+            if (int.TryParse(colonParts[1], CultureInfo.InvariantCulture, out var p))
+            {
+                port = p;
+            }
+        }
+
+        return (user, host, port);
     }
 
     /// <summary>
@@ -456,6 +494,13 @@ public sealed partial class ClusterOrchestrator
         CancellationToken ct)
     {
         var dnsProvider = ResolveDnsProvider(config);
+
+        if (string.Equals(action.Target, "domains", StringComparison.OrdinalIgnoreCase) || config.Root.ContainsKey("domains"))
+        {
+            await DomainRoutingService.SynchronizeDomainsAsync(config, nodes, dnsProvider, logger, ct).ConfigureAwait(false);
+            return;
+        }
+
         if (dnsProvider == null)
         {
             logger?.Invoke($"DNS provider is not configured. Skipping DNS update for '{action.Target}'.");
@@ -586,19 +631,94 @@ public sealed partial class ClusterOrchestrator
             ?? serviceObj["healthcheck_endpoint"]?.ToString()
             ?? serviceObj["healthcheckEndpoint"]?.ToString();
 
+        var replicas = serviceObj.TryGetPropertyValue("replicas", out var repVal) &&
+                       int.TryParse(repVal?.ToString(), CultureInfo.InvariantCulture, out var rep)
+            ? rep
+            : 1;
+
+        var networks = ExtractStringList(serviceObj, "networks");
+        if (networks.Count == 0)
+        {
+            networks = ["default"];
+        }
+
         return new ServiceSpec
         {
             Name = serviceName,
             Image = image,
             Priority = priority,
             VipAddress = vipAddress,
+            Replicas = replicas,
+            TargetNode = serviceObj["node"]?.ToString(),
+            TargetNodes = ExtractStringList(serviceObj, "nodes"),
+            Networks = networks,
+            Egress = serviceObj["egress"]?.ToString() ?? "true",
             HealthcheckEndpoint = healthcheck,
             Ports = ExtractStringList(serviceObj, "ports"),
-            Volumes = ExtractStringList(serviceObj, "volumes"),
+            Volumes = ExtractServiceVolumes(serviceObj, config),
             Labels = ExtractStringDictionary(serviceObj, "labels"),
             Environment = ExtractServiceEnvironment(serviceName, serviceObj, config),
-            Files = ExtractServiceFiles(serviceName, serviceObj, config)
+            Files = ExtractServiceFiles(serviceName, serviceObj, config),
+            Command = serviceObj["command"]?.ToString() ?? serviceObj["cmd"]?.ToString(),
+            Entrypoint = serviceObj["entrypoint"]?.ToString(),
+            WorkingDir = serviceObj["working_dir"]?.ToString() ?? serviceObj["workdir"]?.ToString(),
+            User = serviceObj["user"]?.ToString(),
+            Hostname = serviceObj["hostname"]?.ToString(),
+            Domainname = serviceObj["domainname"]?.ToString(),
+            Restart = serviceObj["restart"]?.ToString() ?? "unless-stopped",
+            Privileged = bool.TryParse(serviceObj["privileged"]?.ToString(), out var prb) && prb,
+            CapAdd = ExtractStringList(serviceObj, "cap_add"),
+            CapDrop = ExtractStringList(serviceObj, "cap_drop"),
+            Devices = ExtractStringList(serviceObj, "devices"),
+            Sysctls = ExtractStringDictionary(serviceObj, "sysctls"),
+            ExtraHosts = ExtractStringList(serviceObj, "extra_hosts"),
+            NetworkMode = serviceObj["network_mode"]?.ToString(),
+            ShmSize = serviceObj.TryGetPropertyValue("shm_size", out var shm) && long.TryParse(shm?.ToString(), CultureInfo.InvariantCulture, out var shmBytes) ? shmBytes : null,
+            MemLimit = serviceObj["mem_limit"]?.ToString() ?? serviceObj["memory"]?.ToString(),
+            Cpus = serviceObj.TryGetPropertyValue("cpus", out var cpuVal) && double.TryParse(cpuVal?.ToString(), CultureInfo.InvariantCulture, out var cpus) ? cpus : null,
+            StopSignal = serviceObj["stop_signal"]?.ToString(),
+            StopGracePeriod = serviceObj.TryGetPropertyValue("stop_grace_period", out var sgp) && int.TryParse(sgp?.ToString(), CultureInfo.InvariantCulture, out var graceSec) ? graceSec : null
         };
+    }
+
+    private static List<string> ExtractServiceVolumes(JsonObject serviceObj, ConfigTree? config)
+    {
+        var result = new List<string>();
+
+        if (serviceObj["volumes"] is JsonArray arr)
+        {
+            foreach (var item in arr)
+            {
+                if (item != null && !string.IsNullOrWhiteSpace(item.ToString()))
+                {
+                    result.Add(item.ToString().Trim());
+                }
+            }
+            return result;
+        }
+
+        if (serviceObj["volumes"] is JsonObject volDict)
+        {
+            foreach (var (containerPath, volVal) in volDict)
+            {
+                if (volVal == null) continue;
+                var rawVal = volVal.ToString().Trim();
+                var cleanName = rawVal.StartsWith("$volumes.", StringComparison.OrdinalIgnoreCase)
+                    ? rawVal.Substring("$volumes.".Length)
+                    : rawVal;
+
+                var hostPath = cleanName;
+                if (config?.Root["volumes"]?[cleanName] is JsonObject definedVol &&
+                    definedVol.TryGetPropertyValue("path", out var p) && p != null)
+                {
+                    hostPath = p.ToString();
+                }
+
+                result.Add($"{hostPath}:{containerPath}");
+            }
+        }
+
+        return result;
     }
 
     private static List<string> ExtractStringList(JsonObject obj, string propertyName)
@@ -663,7 +783,16 @@ public sealed partial class ClusterOrchestrator
                 var raw = contentVal?.ToString() ?? string.Empty;
                 var fileContent = raw;
 
-                if (File.Exists(raw))
+                if (raw.StartsWith("$files.", StringComparison.OrdinalIgnoreCase) && config != null)
+                {
+                    var fileKey = raw.Substring("$files.".Length).TrimStart('[').TrimEnd(']').Trim('\'', '"');
+                    var fromConfig = config.Root["files"]?[fileKey]?.ToString() ?? config.FindNode(raw.Substring(1))?.ToString();
+                    if (!string.IsNullOrEmpty(fromConfig))
+                    {
+                        fileContent = fromConfig;
+                    }
+                }
+                else if (File.Exists(raw))
                 {
                     fileContent = File.ReadAllText(raw);
                 }
@@ -1095,7 +1224,7 @@ public sealed partial class ClusterOrchestrator
             var nodeObj = config.Root["nodes"]?[node.NodeName] as JsonObject;
 
             var vpnIp = nodeObj?["vpn_ip"]?.ToString() ?? DefaultWireGuardIp;
-            var isPublic = nodeObj?["is_public"]?.GetValue<bool>() ?? false;
+            var isPublic = bool.TryParse(nodeObj?["is_public"]?.ToString(), out var ipb) && ipb;
 
             var (privKey, pubKey) = await ResolveWireGuardKeysForNodeAsync(node, nodeObj, ct).ConfigureAwait(false);
 
@@ -1230,22 +1359,71 @@ public sealed partial class ClusterOrchestrator
         var forwards = new List<PortForwardRule>();
         var publicPorts = new HashSet<int>();
 
-        if (!config.Root.TryGetPropertyValue("services", out var servicesNode) || servicesNode is not JsonObject servicesObj)
+        if (config.Root.TryGetPropertyValue("services", out var servicesNode) && servicesNode is JsonObject servicesObj)
         {
-            return (forwards, publicPorts.ToList());
+            foreach (var (_, svcVal) in servicesObj)
+            {
+                if (svcVal is not JsonObject sObj)
+                {
+                    continue;
+                }
+
+                ParseServicePortForwards(sObj, forwards, publicPorts);
+            }
         }
 
-        foreach (var (_, svcVal) in servicesObj)
+        if (config.Root.TryGetPropertyValue("ports", out var rootPortsNode) && rootPortsNode is JsonObject rootPortsObj)
         {
-            if (svcVal is not JsonObject sObj)
+            ParseNamedPortsDictionary(config, rootPortsObj, forwards, publicPorts);
+        }
+
+        return (forwards, publicPorts.ToList());
+    }
+
+    private static void ParseNamedPortsDictionary(
+        ConfigTree config,
+        JsonObject rootPortsObj,
+        List<PortForwardRule> forwards,
+        HashSet<int> publicPorts)
+    {
+        foreach (var (_, ruleVal) in rootPortsObj)
+        {
+            if (ruleVal is not JsonObject rObj) continue;
+            var fromStr = rObj["from"]?.ToString();
+            var toStr = rObj["to"]?.ToString();
+            var proto = rObj["proto"]?.ToString() ?? "tcp";
+
+            if (string.IsNullOrEmpty(fromStr) || string.IsNullOrEmpty(toStr)) continue;
+
+            var fromColon = fromStr.LastIndexOf(':');
+            if (fromColon <= 0 || !int.TryParse(fromStr[(fromColon + 1)..], CultureInfo.InvariantCulture, out var hostPort))
             {
                 continue;
             }
 
-            ParseServicePortForwards(sObj, forwards, publicPorts);
-        }
+            publicPorts.Add(hostPort);
 
-        return (forwards, publicPorts.ToList());
+            var toColon = toStr.LastIndexOf(':');
+            var targetHost = toColon > 0 ? toStr[..toColon] : toStr;
+            var targetPort = toColon > 0 && int.TryParse(toStr[(toColon + 1)..], CultureInfo.InvariantCulture, out var tp) ? tp : hostPort;
+
+            var targetVip = targetHost;
+            if (targetHost.StartsWith("$ingress", StringComparison.OrdinalIgnoreCase) || string.Equals(targetHost, "ingress", StringComparison.OrdinalIgnoreCase))
+            {
+                targetVip = "fd67:b00b:0001:ffff::1";
+            }
+            else if (config.Root["services"]?[targetHost] is JsonObject targetSvc)
+            {
+                targetVip = targetSvc["vip"]?.ToString() ?? targetHost;
+            }
+
+            forwards.Add(new PortForwardRule(
+                HostPort: hostPort,
+                Protocol: proto,
+                TargetVip: targetVip,
+                TargetPort: targetPort,
+                AddressFamily: fromStr.Contains("ipv6", StringComparison.OrdinalIgnoreCase) ? "ipv6" : (fromStr.Contains("ipv4", StringComparison.OrdinalIgnoreCase) ? "ipv4" : "any")));
+        }
     }
 
     private static void ParseServicePortForwards(

@@ -2,9 +2,9 @@
 
 ## Overview
 
-- **Total Files**: 157
-- **Total Lines of Code**: 21200
-- **Total Size**: 801.7 KB
+- **Total Files**: 159
+- **Total Lines of Code**: 22149
+- **Total Size**: 840.3 KB
 - **Root Directory**: `/root/src/starry`
 
 ## Repository Structure
@@ -158,6 +158,7 @@ starry/
 │       │   └── SshNodeOptions.cs
 │       ├── Orchestration/
 │       │   ├── ClusterOrchestrator.cs
+│       │   ├── DomainRoutingService.cs
 │       │   ├── HostAdoptionService.cs
 │       │   ├── MigrationPlan.cs
 │       │   ├── MigrationPlanner.cs
@@ -187,7 +188,8 @@ starry/
 │   │   ├── ClusterMatrixFuzzerTests.cs
 │   │   ├── LiveDockerSshClusterFixture.cs
 │   │   ├── LiveMultiNodeSshClusterE2ETests.cs
-│   │   └── Starry.E2ETests.csproj
+│   │   ├── Starry.E2ETests.csproj
+│   │   └── V3PipelineIntegrationTests.cs
 │   └── Starry.UnitTests/
 │       ├── ConfigValidatorTests.cs
 │       ├── ContainerPrioritySchedulerTests.cs
@@ -570,7 +572,7 @@ Code
 
 ## File: README.md
 
-**Lines**: 157 | **Size**: 6.5 KB | **Language**: markdown
+**Lines**: 163 | **Size**: 7.5 KB | **Language**: markdown
 
 ````markdown
 # 🌟 STARRY
@@ -598,9 +600,12 @@ Code
 **`starry`** is an autonomous, single-binary GitOps orchestrator designed to run across heterogeneous cloud providers and low-cost virtual private servers (including NAT-isolated nodes and servers with small 10–20 GB SSDs).
 
 It manages the entire lifecycle of:
-* **Container Runtimes**: Direct Unix Domain Socket control of **Docker Engine** and **Podman** (Rootful & unprivileged Rootless).
-* **Encrypted Mesh Networking**: P2P **WireGuard** (`starry0`) with automated NAT traversal (`PersistentKeepalive = 25`) and Roaming Container VIPs (`10.99.x.x`).
-* **Host Firewalls & NAT**: Isolated table `inet starry` in **`nftables`** for atomic DNAT port forwarding and strict packet filtering.
+* **Container Runtimes**: Direct Unix Domain Socket control of **Docker Engine** and **Podman** (Rootful & unprivileged Rootless) supporting full Docker Compose specifications (capabilities, sysctls, shm_size, memory limits, and networks).
+* **Encrypted IPv6 Mesh Networking**: P2P **WireGuard** (`starry0`) running on the ULA prefix **`fd67:b00b::/32`**, assigning each host a `/48` subnet and each container replica a dedicated `/64` subnet with zero-downtime routing.
+* **Functional Configuration Engine (`Starry.Dsl`)**: Pure F# unified graph AST supporting whole-subtree substitution (`$`), object inheritance (`$:`), and automatic `files/*` text mounting.
+* **Host Firewalls & NAT**: Isolated table `inet starry` in **`nftables`** for atomic DNAT port forwarding, inter-container network ACL isolation, and symmetric outbound SNAT.
+* **Scoped Internal DNS**: Embedded DNS server (`fd67:b00b:<host_id>::1`) with source-aware ACL isolation, round-robin replica load-balancing, and egress policy enforcement.
+* **Managed Ingress & L4 SNI Proxy**: Nginx with `stream { ssl_preread on; }` for Layer 4 TLS passthrough, Layer 7 SSL termination, and automated Cloudflare Origin Rules.
 * **Operating System Packages**: Unified abstraction across **Apt** (Debian/Ubuntu), **Dnf** (RHEL/AlmaLinux/Rocky/Fedora), **Apk** (Alpine), and **Pacman** (Arch Linux) with rolling security updates.
 * **Security & Secret Management**: In-repository encrypted secrets using **AES-256-GCM** bound to canonical JSON paths with **AAD (Additional Authenticated Data)** to block cut-and-paste tampering.
 * **Zero-Disk Streaming Backups**: Real-time volume backups via `tar | zstd | rclone rcat` without creating intermediate files on constrained VPS disks.
@@ -694,9 +699,12 @@ starry apply --config ./cluster
 | `starry nodes rotate-keys` | Generate fresh Ed25519 SSH keys and update remote `authorized_keys`. |
 | `starry plan` | Generate and visualize DAG migration graph with colored icons. |
 | `starry apply` | Execute planned actions across the cluster fleet. |
-| `starry volume open <node> <vol>` | Open remote container volume via secure SFTP tunnel. |
+| `starry net interfaces [--verify]` | Inspect and verify network interfaces, IPv4/IPv6, and NAT status. |
+| `starry volume open <volume>` | Open remote container volume via secure SFTP tunnel. |
 | `starry bundle export -o <archive>` | Export entire fleet into a disaster recovery capsule. |
 | `starry bundle import <archive>` | Restore fleet capsule with optional `--override-ip` mappings. |
+| `starry adopt <user@host:port>` | Brownfield zero-downtime adoption of existing Docker/Podman servers. |
+| `starry unmanaged list` | List unmanaged containers running outside Starry GitOps. |
 
 ---
 
@@ -6205,7 +6213,7 @@ Starry sorts deployment execution ascending by priority: databases are confirmed
 
 ## File: site/en/guide/getting-started.md
 
-**Lines**: 196 | **Size**: 4.8 KB | **Language**: markdown
+**Lines**: 192 | **Size**: 4.7 KB | **Language**: markdown
 
 ````markdown
 # Getting Started with Starry
@@ -6341,20 +6349,16 @@ During the bootstrap process, Starry will:
 Edit your `starry.yaml` file to define desired state:
 
 ```yaml
-version: "1.0"
+version: "3.0"
 
 mesh:
-  cidr: "10.42.0.0/16"
+  prefix: "fd67:b00b::/32"
   port: 51820
 
 nodes:
   node-01:
-    host: "203.0.113.10"
-    vpn_ip: "10.42.0.1"
+    ssh: "root@203.0.113.10:22"
     engine: "docker"
-    packages:
-      - curl
-      - htop
 
 services:
   web:
@@ -6363,7 +6367,7 @@ services:
     ports:
       - "80:80"
     env:
-      API_SECRET: "ENC[AES256_GCM,data:...,iv:...,tag:...]"
+      API_SECRET: "ENC[AES256_GCM:v1:...]"
 ```
 
 ### Dry Run (Plan)
@@ -6806,7 +6810,7 @@ Starry сортирует сервисы по возрастанию `priority` 
 
 ## File: site/guide/getting-started.md
 
-**Lines**: 196 | **Size**: 7.4 KB | **Language**: markdown
+**Lines**: 192 | **Size**: 7.3 KB | **Language**: markdown
 
 ````markdown
 # Быстрый старт с Starry
@@ -6942,20 +6946,16 @@ starry nodes bootstrap root@203.0.113.10 --name node-01 --engine docker
 Отредактируйте `starry.yaml`, описав желаемые сервисы:
 
 ```yaml
-version: "1.0"
+version: "3.0"
 
 mesh:
-  cidr: "10.42.0.0/16"
+  prefix: "fd67:b00b::/32"
   port: 51820
 
 nodes:
   node-01:
-    host: "203.0.113.10"
-    vpn_ip: "10.42.0.1"
+    ssh: "root@203.0.113.10:22"
     engine: "docker"
-    packages:
-      - curl
-      - htop
 
 services:
   web:
@@ -6964,7 +6964,7 @@ services:
     ports:
       - "80:80"
     env:
-      API_SECRET: "ENC[AES256_GCM,data:...,iv:...,tag:...]"
+      API_SECRET: "ENC[AES256_GCM:v1:...]"
 ```
 
 ### Просмотр изменений (Plan)
@@ -7324,7 +7324,7 @@ starry encrypt global --reencrypt \
 
 ## File: src/Starry.Cli/Program.cs
 
-**Lines**: 1420 | **Size**: 54.7 KB | **Language**: csharp
+**Lines**: 1447 | **Size**: 56.0 KB | **Language**: csharp
 
 ```csharp
 ﻿using System.Globalization;
@@ -7522,6 +7522,7 @@ internal static class Program
 
             await adoptionService.AdoptHostAsync(conn, adoptionOptions).ConfigureAwait(false);
             AnsiConsole.MarkupLine($"[bold green]✓ Successfully adopted host! Configuration generated in '{Markup.Escape(outDir)}'.[/]");
+            await CheckAndTriggerGitSyncAsync(outDir, args).ConfigureAwait(false);
             return 0;
         }
         catch (Exception ex)
@@ -7822,6 +7823,7 @@ internal static class Program
             engine.Pack(tree, outputFile, format);
             var msg = localizer.FormatString(LocalizationKeys.ConfigPackSuccess, outputFile);
             AnsiConsole.MarkupLine($"[green]✓ {Markup.Escape(msg)}[/]");
+            _ = CheckAndTriggerGitSyncAsync(sourceDir, args, tree);
             return 0;
         }
         catch (Exception ex)
@@ -7844,6 +7846,7 @@ internal static class Program
             engine.Split(tree, targetDir, format);
             var msg = localizer.FormatString(LocalizationKeys.ConfigSplitSuccess, targetDir);
             AnsiConsole.MarkupLine($"[green]✓ {Markup.Escape(msg)}[/]");
+            _ = CheckAndTriggerGitSyncAsync(targetDir, args, tree);
             return 0;
         }
         catch (Exception ex)
@@ -7932,6 +7935,7 @@ internal static class Program
             var encryptedCount = manager.EncryptOpenSecrets(tree, key, targetPath, engine);
 
             AnsiConsole.MarkupLine($"[green]✓ Successfully encrypted {encryptedCount} open secret(s) with AES-256-GCM + AAD.[/]");
+            _ = CheckAndTriggerGitSyncAsync(targetPath, args, tree);
             return 0;
         }
         catch (Exception ex)
@@ -7974,6 +7978,10 @@ internal static class Program
             if (gitCommit)
             {
                 await RunGitCommitAndPushAsync(gitPush).ConfigureAwait(false);
+            }
+            else
+            {
+                await CheckAndTriggerGitSyncAsync(targetPath, args, tree).ConfigureAwait(false);
             }
 
             return 0;
@@ -8352,6 +8360,7 @@ internal static class Program
 
             engine.Split(tree, configPath, "yaml");
             AnsiConsole.MarkupLine($"[bold green]✓ Node '{Markup.Escape(nodeName)}' successfully added to configuration and bootstrapped![/]");
+            await CheckAndTriggerGitSyncAsync(configPath, args, tree).ConfigureAwait(false);
             return 0;
         }
         catch (Exception ex)
@@ -8456,6 +8465,7 @@ internal static class Program
             }
 
             AnsiConsole.MarkupLine($"[bold green]✓ Successfully rotated SSH keys for {targets.Count} node(s) and updated configuration![/]");
+            await CheckAndTriggerGitSyncAsync(configPath, args, tree).ConfigureAwait(false);
             return 0;
         }
         catch (Exception ex)
@@ -8745,6 +8755,23 @@ internal static class Program
         var errorMsg = localizer.FormatString(LocalizationKeys.ErrorUnknownCommand, command);
         AnsiConsole.MarkupLine($"[red]{Markup.Escape(errorMsg)}[/]");
         return Task.FromResult(1);
+    }
+
+    private static async Task CheckAndTriggerGitSyncAsync(string workingDir, string[] args, ConfigTree? tree = null)
+    {
+        var hasFlag = args.Any(a => string.Equals(a, "--git-sync", StringComparison.OrdinalIgnoreCase));
+        var hasConfigAutoSync = tree?.Root["git"]?["auto_sync"]?.GetValue<bool>() == true;
+
+        if (hasFlag || hasConfigAutoSync)
+        {
+            var syncService = new GitSyncService();
+            AnsiConsole.MarkupLine("[grey]Triggering automated Git upstream sync...[/]");
+            var ok = await syncService.SyncUpstreamAsync(workingDir).ConfigureAwait(false);
+            if (ok)
+            {
+                AnsiConsole.MarkupLine("[green]✓ Git repository automatically synced upstream.[/]");
+            }
+        }
     }
 }
 ```
@@ -9444,7 +9471,7 @@ public sealed record SecretEnvelope(
 
 ## File: src/Starry.Dsl/ConfigAst.fs
 
-**Lines**: 384 | **Size**: 16.3 KB | **Language**: fsharp
+**Lines**: 404 | **Size**: 17.3 KB | **Language**: fsharp
 
 ```fsharp
 namespace Starry.Dsl
@@ -9646,7 +9673,11 @@ module ConfigAst =
             | ObjectNode (m, _) ->
                 match m.TryFind(head) with
                 | Some child -> getAtPath tail child
-                | None -> None
+                | None ->
+                    let joined = String.concat "." pathSegments
+                    match m.TryFind(joined) with
+                    | Some child -> Some child
+                    | None -> None
             | _ -> None
 
     // Unified Directory-to-Graph AST Loader
@@ -9697,10 +9728,26 @@ module ConfigAst =
                 | _ -> ()
             else
                 let segments =
-                    let pathWithoutExt =
-                        if String.IsNullOrEmpty(dirName) then fileNameNoExt
-                        else Path.Combine(dirName, fileNameNoExt).Replace('\\', '/')
-                    pathWithoutExt.Split('/', StringSplitOptions.RemoveEmptyEntries)
+                    let isUnstructured =
+                        match parsed with
+                        | StringNode _ -> true
+                        | _ -> false
+
+                    let isUnderFiles =
+                        if String.IsNullOrEmpty(dirName) then false
+                        else dirName.Equals("files", StringComparison.OrdinalIgnoreCase) ||
+                             dirName.StartsWith("files/", StringComparison.OrdinalIgnoreCase) ||
+                             dirName.StartsWith("files\\", StringComparison.OrdinalIgnoreCase)
+
+                    let pathSegmentStr =
+                        if isUnderFiles || isUnstructured then
+                            if String.IsNullOrEmpty(dirName) then fileName
+                            else Path.Combine(dirName, fileName).Replace('\\', '/')
+                        else
+                            if String.IsNullOrEmpty(dirName) then fileNameNoExt
+                            else Path.Combine(dirName, fileNameNoExt).Replace('\\', '/')
+
+                    pathSegmentStr.Split('/', StringSplitOptions.RemoveEmptyEntries)
                     |> Array.toList
 
                 rootNode <- setAtPath segments parsed rootNode
@@ -11370,7 +11417,7 @@ public sealed record ConfigValidationResult(
 
 ## File: src/Starry.Infrastructure/Configuration/ConfigValidator.cs
 
-**Lines**: 167 | **Size**: 6.8 KB | **Language**: csharp
+**Lines**: 170 | **Size**: 7.0 KB | **Language**: csharp
 
 ```csharp
 using System.Globalization;
@@ -11414,9 +11461,12 @@ public static class ConfigValidator
                     continue;
                 }
 
-                if (!nodeObj.TryGetPropertyValue("host", out var hostVal) || hostVal == null || string.IsNullOrWhiteSpace(hostVal.ToString()))
+                var hasHost = nodeObj.TryGetPropertyValue("host", out var hostVal) && hostVal != null && !string.IsNullOrWhiteSpace(hostVal.ToString());
+                var hasSsh = nodeObj.TryGetPropertyValue("ssh", out var sshVal) && sshVal != null && !string.IsNullOrWhiteSpace(sshVal.ToString());
+
+                if (!hasHost && !hasSsh)
                 {
-                    issues.Add(new ValidationIssue($"{nodePath}.host", $"Node '{nodeName}' is missing required 'host' address.", sourceEntry?.FilePath));
+                    issues.Add(new ValidationIssue($"{nodePath}.host", $"Node '{nodeName}' is missing required 'host' address or 'ssh' connection string.", sourceEntry?.FilePath));
                 }
 
                 if (nodeObj.TryGetPropertyValue("port", out var portVal) && portVal != null &&
@@ -11913,18 +11963,19 @@ public sealed record ValidationIssue(
 
 ## File: src/Starry.Infrastructure/Configuration/VirtualConfigEngine.cs
 
-**Lines**: 318 | **Size**: 12.1 KB | **Language**: csharp
+**Lines**: 467 | **Size**: 17.3 KB | **Language**: csharp
 
 ```csharp
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Starry.Core.Configuration;
+using Starry.Dsl;
 
 namespace Starry.Infrastructure.Configuration;
 
 /// <summary>
 /// Virtual Configuration Engine for loading, merging, packing, splitting,
-/// formatting, and validating multi-file configuration trees with Source Map tracking.
+/// formatting, resolving AST graph references via Starry.Dsl, and validating configuration trees.
 /// </summary>
 public sealed class VirtualConfigEngine
 {
@@ -11946,21 +11997,69 @@ public sealed class VirtualConfigEngine
         }
     }
 
-    public ConfigTree Load(string path)
+    public ConfigTree Load(string path, bool resolveGraph = true, Func<string, string>? secretDecryptor = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
+        ConfigTree tree;
         if (File.Exists(path))
         {
-            return LoadFile(path);
+            tree = LoadFile(path);
         }
-
-        if (Directory.Exists(path))
+        else if (Directory.Exists(path))
         {
-            return LoadDirectory(path);
+            tree = LoadDirectory(path);
+        }
+        else
+        {
+            throw new FileNotFoundException($"Configuration path does not exist: {path}", path);
         }
 
-        throw new FileNotFoundException($"Configuration path does not exist: {path}", path);
+        if (resolveGraph)
+        {
+            ResolveGraph(tree, secretDecryptor);
+        }
+
+        return tree;
+    }
+
+    public void ResolveGraph(ConfigTree tree, Func<string, string>? secretDecryptor = null)
+    {
+        ArgumentNullException.ThrowIfNull(tree);
+
+        var optDecryptor = secretDecryptor != null
+            ? Microsoft.FSharp.Core.FSharpOption<Microsoft.FSharp.Core.FSharpFunc<string, string>>.Some(
+                Microsoft.FSharp.Core.FuncConvert.FromFunc<string, string>(secretDecryptor))
+            : Microsoft.FSharp.Core.FSharpOption<Microsoft.FSharp.Core.FSharpFunc<string, string>>.None;
+
+        var configNode = ConfigAst.fromJsonNode(Microsoft.FSharp.Core.FSharpOption<string>.None, tree.Root);
+        var resolvedResult = GraphResolver.resolve(configNode, optDecryptor);
+
+        if (resolvedResult.IsError)
+        {
+            var err = resolvedResult.ErrorValue;
+            if (err.IsCircularReference)
+            {
+                var chain = string.Join(" -> ", ((GraphResolver.ResolutionError.CircularReference)err).cycleChain);
+                throw new InvalidOperationException($"Circular dependency detected in configuration graph: {chain}");
+            }
+
+            throw new InvalidOperationException($"Failed to resolve configuration graph references: {err}");
+        }
+
+        if (ConfigAst.toJsonNode(resolvedResult.ResultValue) is JsonObject resolvedJson)
+        {
+            var keys = tree.Root.Select(kv => kv.Key).ToList();
+            foreach (var key in keys)
+            {
+                tree.Root.Remove(key);
+            }
+
+            foreach (var (k, v) in resolvedJson)
+            {
+                tree.Root[k] = v != null ? JsonNode.Parse(v.ToJsonString()) : null;
+            }
+        }
     }
 
     private ConfigTree LoadFile(string filePath)
@@ -11995,42 +12094,107 @@ public sealed class VirtualConfigEngine
 
         foreach (var file in files)
         {
-            var relative = Path.GetRelativePath(dirPath, file).Replace('\\', '/');
-            var provider = FindProviderForFile(file);
-            var bytes = File.ReadAllBytes(file);
-            var parsed = provider.Parse(bytes, relative);
+            LoadSingleConfigFile(tree, dirPath, file);
+        }
 
-            var pathWithoutExt = Path.Combine(
-                Path.GetDirectoryName(relative) ?? string.Empty,
-                Path.GetFileNameWithoutExtension(relative)).Replace('\\', '/');
+        LoadRawFilesDirectory(tree, dirPath);
 
-            var fileNameWithoutExt = Path.GetFileNameWithoutExtension(relative);
+        return tree;
+    }
 
-            if (string.Equals(fileNameWithoutExt, "starry", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(fileNameWithoutExt, "config", StringComparison.OrdinalIgnoreCase))
+    private void LoadSingleConfigFile(ConfigTree tree, string dirPath, string file)
+    {
+        var relative = Path.GetRelativePath(dirPath, file).Replace('\\', '/');
+        var provider = FindProviderForFile(file);
+        var bytes = File.ReadAllBytes(file);
+        var parsed = provider.Parse(bytes, relative);
+
+        var dirName = Path.GetDirectoryName(relative);
+        var fileNameNoExt = Path.GetFileNameWithoutExtension(relative);
+
+        if (string.IsNullOrEmpty(dirName) &&
+            (string.Equals(fileNameNoExt, "starry", StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(fileNameNoExt, "config", StringComparison.OrdinalIgnoreCase)))
+        {
+            if (parsed is JsonObject rootObj)
             {
-                // Root-level configuration file merges directly into root
-                if (parsed is JsonObject rootObj)
+                PopulateObjectIntoTree(tree, rootObj, string.Empty, relative);
+            }
+        }
+        else
+        {
+            var pathWithoutExt = Path.Combine(dirName ?? string.Empty, fileNameNoExt).Replace('\\', '/');
+            var canonicalPrefix = pathWithoutExt.Replace('/', '.');
+            if (parsed is JsonObject obj)
+            {
+                if (string.Equals(dirName, "nodes", StringComparison.OrdinalIgnoreCase) &&
+                    obj.TryGetPropertyValue("ssh", out var sshVal) && sshVal != null &&
+                    (!obj.ContainsKey("host") || string.IsNullOrWhiteSpace(obj["host"]?.ToString())))
                 {
-                    PopulateObjectIntoTree(tree, rootObj, string.Empty, relative);
+                    var (u, h, p) = ParseSsh(sshVal.ToString());
+                    obj["host"] = h;
+                    obj["port"] = p;
+                    obj["user"] = u;
                 }
+
+                PopulateObjectIntoTree(tree, obj, canonicalPrefix, relative);
             }
             else
             {
-                // Hierarchy mapping: nodes/bocchi.yaml -> root.nodes.bocchi
-                var canonicalPrefix = pathWithoutExt.Replace('/', '.');
-                if (parsed is JsonObject obj)
-                {
-                    PopulateObjectIntoTree(tree, obj, canonicalPrefix, relative);
-                }
-                else
-                {
-                    tree.SetNode(canonicalPrefix, parsed, new SourceMapEntry(canonicalPrefix, relative));
-                }
+                tree.SetNode(canonicalPrefix, parsed, new SourceMapEntry(canonicalPrefix, relative));
+            }
+        }
+    }
+
+    private static (string User, string Host, int Port) ParseSsh(string input)
+    {
+        var user = "root";
+        var host = input.Trim();
+        var port = 22;
+
+        if (host.Contains('@', StringComparison.Ordinal))
+        {
+            var atParts = host.Split('@', 2);
+            user = atParts[0];
+            host = atParts[1];
+        }
+
+        if (host.Contains(':', StringComparison.Ordinal))
+        {
+            var colonParts = host.Split(':', 2);
+            host = colonParts[0];
+            if (int.TryParse(colonParts[1], System.Globalization.CultureInfo.InvariantCulture, out var p))
+            {
+                port = p;
             }
         }
 
-        return tree;
+        return (user, host, port);
+    }
+
+    private static void LoadRawFilesDirectory(ConfigTree tree, string dirPath)
+    {
+        var filesDir = Path.Combine(dirPath, "files");
+        if (!Directory.Exists(filesDir))
+        {
+            return;
+        }
+
+        if (tree.Root["files"] is not JsonObject filesObj)
+        {
+            filesObj = new JsonObject();
+            tree.Root["files"] = filesObj;
+        }
+
+        var rawFiles = Directory.GetFiles(filesDir, "*.*", SearchOption.AllDirectories);
+        foreach (var rf in rawFiles)
+        {
+            var rel = Path.GetRelativePath(dirPath, rf).Replace('\\', '/');
+            var relInsideFiles = Path.GetRelativePath(filesDir, rf).Replace('\\', '/');
+            var content = File.ReadAllText(rf);
+            filesObj[relInsideFiles] = JsonValue.Create(content);
+            tree.RegisterSource($"files.{relInsideFiles}", new SourceMapEntry($"files.{relInsideFiles}", rel));
+        }
     }
 
     private static bool IsExcludedConfigPath(string rootDir, string fullPath)
@@ -12068,7 +12232,6 @@ public sealed class VirtualConfigEngine
             }
             else
             {
-                // Clone the node so it can be re-parented into the tree
                 var clonedVal = propVal != null ? JsonNode.Parse(propVal.ToJsonString()) : null;
                 tree.SetNode(currentPath, clonedVal, new SourceMapEntry(currentPath, filePath));
             }
@@ -12104,48 +12267,85 @@ public sealed class VirtualConfigEngine
 
         var provider = FindProviderByName(format);
         var ext = provider.SupportedExtensions[0];
-
         var rootCopy = new JsonObject();
 
         foreach (var (key, val) in tree.Root)
         {
-            if (string.Equals(key, "nodes", StringComparison.OrdinalIgnoreCase) && val is JsonObject nodesObj)
-            {
-                var nodesDir = Path.Combine(targetDirectoryPath, "nodes");
-                Directory.CreateDirectory(nodesDir);
-                foreach (var (nodeName, nodeVal) in nodesObj)
-                {
-                    if (nodeVal != null)
-                    {
-                        var filePath = Path.Combine(nodesDir, $"{nodeName}{ext}");
-                        File.WriteAllText(filePath, provider.Serialize(nodeVal));
-                    }
-                }
-            }
-            else if (string.Equals(key, "services", StringComparison.OrdinalIgnoreCase) && val is JsonObject servicesObj)
-            {
-                var servicesDir = Path.Combine(targetDirectoryPath, "services");
-                Directory.CreateDirectory(servicesDir);
-                foreach (var (svcName, svcVal) in servicesObj)
-                {
-                    if (svcVal != null)
-                    {
-                        var filePath = Path.Combine(servicesDir, $"{svcName}{ext}");
-                        File.WriteAllText(filePath, provider.Serialize(svcVal));
-                    }
-                }
-            }
-            else
-            {
-                if (val != null)
-                {
-                    rootCopy[key] = JsonNode.Parse(val.ToJsonString());
-                }
-            }
+            SplitSubtreeProperty(targetDirectoryPath, key, val, ext, provider, rootCopy);
         }
 
         var mainConfigPath = Path.Combine(targetDirectoryPath, $"starry{ext}");
         File.WriteAllText(mainConfigPath, provider.Serialize(rootCopy));
+    }
+
+    private static void SplitSubtreeProperty(
+        string targetDirectoryPath,
+        string key,
+        JsonNode? val,
+        string ext,
+        IConfigFormatProvider provider,
+        JsonObject rootCopy)
+    {
+        if (string.Equals(key, "nodes", StringComparison.OrdinalIgnoreCase) && val is JsonObject nodesObj)
+        {
+            WriteDirectorySubtree(Path.Combine(targetDirectoryPath, "nodes"), nodesObj, ext, provider);
+        }
+        else if (string.Equals(key, "services", StringComparison.OrdinalIgnoreCase) && val is JsonObject servicesObj)
+        {
+            WriteDirectorySubtree(Path.Combine(targetDirectoryPath, "services"), servicesObj, ext, provider);
+        }
+        else if (string.Equals(key, "domains", StringComparison.OrdinalIgnoreCase) && val != null)
+        {
+            var domDir = Path.Combine(targetDirectoryPath, "domains");
+            Directory.CreateDirectory(domDir);
+            File.WriteAllText(Path.Combine(domDir, $"domains{ext}"), provider.Serialize(val));
+        }
+        else if (string.Equals(key, "ports", StringComparison.OrdinalIgnoreCase) && val != null)
+        {
+            File.WriteAllText(Path.Combine(targetDirectoryPath, $"ports{ext}"), provider.Serialize(val));
+        }
+        else if (string.Equals(key, "volumes", StringComparison.OrdinalIgnoreCase) && val != null)
+        {
+            File.WriteAllText(Path.Combine(targetDirectoryPath, $"volumes{ext}"), provider.Serialize(val));
+        }
+        else if (string.Equals(key, "files", StringComparison.OrdinalIgnoreCase) && val is JsonObject filesObj)
+        {
+            WriteRawFilesSubtree(Path.Combine(targetDirectoryPath, "files"), filesObj);
+        }
+        else if (val != null)
+        {
+            rootCopy[key] = JsonNode.Parse(val.ToJsonString());
+        }
+    }
+
+    private static void WriteDirectorySubtree(string dir, JsonObject obj, string ext, IConfigFormatProvider provider)
+    {
+        Directory.CreateDirectory(dir);
+        foreach (var (name, nodeVal) in obj)
+        {
+            if (nodeVal != null)
+            {
+                File.WriteAllText(Path.Combine(dir, $"{name}{ext}"), provider.Serialize(nodeVal));
+            }
+        }
+    }
+
+    private static void WriteRawFilesSubtree(string filesDir, JsonObject filesObj)
+    {
+        Directory.CreateDirectory(filesDir);
+        foreach (var (name, contentVal) in filesObj)
+        {
+            if (contentVal is JsonValue jv)
+            {
+                var filePath = Path.Combine(filesDir, name);
+                var pDir = Path.GetDirectoryName(filePath);
+                if (!string.IsNullOrEmpty(pDir))
+                {
+                    Directory.CreateDirectory(pDir);
+                }
+                File.WriteAllText(filePath, jv.ToString());
+            }
+        }
     }
 
     public string Format(string content, string format)
@@ -12182,8 +12382,7 @@ public sealed class VirtualConfigEngine
                             ["ssh_key"] = new JsonObject { ["type"] = "string" },
                             ["vpn_ip"] = new JsonObject { ["type"] = "string" },
                             ["is_public"] = new JsonObject { ["type"] = "boolean", ["default"] = false }
-                        },
-                        ["required"] = new JsonArray(JsonValue.Create("host"))
+                        }
                     }
                 },
                 ["services"] = new JsonObject
@@ -12392,7 +12591,7 @@ public sealed class YamlConfigFormatProvider : IConfigFormatProvider
 
 ## File: src/Starry.Infrastructure/Containers/BaseSocketContainerRuntime.cs
 
-**Lines**: 412 | **Size**: 15.7 KB | **Language**: csharp
+**Lines**: 478 | **Size**: 18.6 KB | **Language**: csharp
 
 ```csharp
 using System.Globalization;
@@ -12680,7 +12879,6 @@ public abstract class BaseSocketContainerRuntime : IContainerRuntime
             binds.Add(JsonValue.Create(vol));
         }
 
-        // Mount dynamic files directory
         if (spec.Files.Count > 0)
         {
             var baseDir = $"/var/lib/starry/files/{spec.Name}";
@@ -12705,6 +12903,7 @@ public abstract class BaseSocketContainerRuntime : IContainerRuntime
         labels["starry.priority"] = spec.Priority.ToString(CultureInfo.InvariantCulture);
 
         var (exposedPorts, portBindings) = BuildPortConfigurations(spec.Ports);
+        var hostConfig = BuildHostConfig(spec, binds, portBindings);
 
         var payload = new JsonObject
         {
@@ -12712,15 +12911,81 @@ public abstract class BaseSocketContainerRuntime : IContainerRuntime
             ["Env"] = env,
             ["Labels"] = labels,
             ["ExposedPorts"] = exposedPorts,
-            ["HostConfig"] = new JsonObject
-            {
-                ["Binds"] = binds,
-                ["PortBindings"] = portBindings,
-                ["RestartPolicy"] = new JsonObject { ["Name"] = "unless-stopped" }
-            }
+            ["HostConfig"] = hostConfig
         };
 
+        if (!string.IsNullOrEmpty(spec.Command))
+        {
+            payload["Cmd"] = new JsonArray(JsonValue.Create("sh"), JsonValue.Create("-c"), JsonValue.Create(spec.Command));
+        }
+        if (!string.IsNullOrEmpty(spec.WorkingDir)) payload["WorkingDir"] = spec.WorkingDir;
+        if (!string.IsNullOrEmpty(spec.User)) payload["User"] = spec.User;
+        if (!string.IsNullOrEmpty(spec.Hostname)) payload["Hostname"] = spec.Hostname;
+        if (!string.IsNullOrEmpty(spec.Domainname)) payload["Domainname"] = spec.Domainname;
+        if (!string.IsNullOrEmpty(spec.StopSignal)) payload["StopSignal"] = spec.StopSignal;
+        if (spec.StopGracePeriod.HasValue) payload["StopTimeout"] = spec.StopGracePeriod.Value;
+
         return payload;
+    }
+
+    private static JsonObject BuildHostConfig(ServiceSpec spec, JsonArray binds, JsonObject portBindings)
+    {
+        var hostConfig = new JsonObject
+        {
+            ["Binds"] = binds,
+            ["PortBindings"] = portBindings,
+            ["RestartPolicy"] = new JsonObject { ["Name"] = spec.Restart },
+            ["Privileged"] = spec.Privileged
+        };
+
+        if (spec.CapAdd.Count > 0)
+        {
+            var capAdd = new JsonArray();
+            foreach (var c in spec.CapAdd) capAdd.Add(JsonValue.Create(c));
+            hostConfig["CapAdd"] = capAdd;
+        }
+
+        if (spec.CapDrop.Count > 0)
+        {
+            var capDrop = new JsonArray();
+            foreach (var c in spec.CapDrop) capDrop.Add(JsonValue.Create(c));
+            hostConfig["CapDrop"] = capDrop;
+        }
+
+        if (!string.IsNullOrEmpty(spec.NetworkMode)) hostConfig["NetworkMode"] = spec.NetworkMode;
+        if (spec.ShmSize.HasValue) hostConfig["ShmSize"] = spec.ShmSize.Value;
+
+        var memBytes = ParseMemoryLimitBytes(spec.MemLimit);
+        if (memBytes.HasValue) hostConfig["Memory"] = memBytes.Value;
+
+        if (spec.Cpus.HasValue)
+        {
+            hostConfig["NanoCpus"] = (long)(spec.Cpus.Value * 1_000_000_000);
+        }
+
+        if (spec.Sysctls.Count > 0)
+        {
+            var sysctls = new JsonObject();
+            foreach (var (k, v) in spec.Sysctls) sysctls[k] = v;
+            hostConfig["Sysctls"] = sysctls;
+        }
+
+        return hostConfig;
+    }
+
+    private static long? ParseMemoryLimitBytes(string? memLimit)
+    {
+        if (string.IsNullOrWhiteSpace(memLimit)) return null;
+        var trimmed = memLimit.Trim();
+        if (trimmed.EndsWith("g", StringComparison.OrdinalIgnoreCase) && long.TryParse(trimmed[..^1], CultureInfo.InvariantCulture, out var g))
+            return g * 1024 * 1024 * 1024;
+        if (trimmed.EndsWith("m", StringComparison.OrdinalIgnoreCase) && long.TryParse(trimmed[..^1], CultureInfo.InvariantCulture, out var m))
+            return m * 1024 * 1024;
+        if (trimmed.EndsWith("k", StringComparison.OrdinalIgnoreCase) && long.TryParse(trimmed[..^1], CultureInfo.InvariantCulture, out var k))
+            return k * 1024;
+        if (long.TryParse(trimmed, CultureInfo.InvariantCulture, out var b))
+            return b;
+        return null;
     }
 
     private static (JsonObject ExposedPorts, JsonObject PortBindings) BuildPortConfigurations(IReadOnlyList<string> ports)
@@ -15398,7 +15663,7 @@ public sealed record SshNodeOptions
 
 ## File: src/Starry.Infrastructure/Orchestration/ClusterOrchestrator.cs
 
-**Lines**: 1440 | **Size**: 53.7 KB | **Language**: csharp
+**Lines**: 1618 | **Size**: 61.3 KB | **Language**: csharp
 
 ```csharp
 using System.Globalization;
@@ -15521,9 +15786,21 @@ public sealed partial class ClusterOrchestrator
             ? p
             : 22;
         var user = nodeObj["user"]?.ToString() ?? "root";
+
+        if (nodeObj.TryGetPropertyValue("ssh", out var sshVal) && sshVal != null)
+        {
+            var sshStr = sshVal.ToString();
+            var (parsedUser, parsedHost, parsedPort) = ParseSshString(sshStr);
+            if (!string.IsNullOrEmpty(parsedHost))
+            {
+                host = parsedHost;
+                user = parsedUser;
+                port = parsedPort;
+            }
+        }
         var sshKey = nodeObj["ssh_key"]?.ToString();
         var jumpHost = nodeObj["jump_host"]?.ToString();
-        var isLocalFlag = nodeObj["is_local"]?.GetValue<bool>() ?? false;
+        var isLocalFlag = bool.TryParse(nodeObj["is_local"]?.ToString(), out var ilb) && ilb;
 
         var isLocalHost = string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase) ||
                           string.Equals(host, DefaultLocalIp, StringComparison.Ordinal) ||
@@ -15557,6 +15834,32 @@ public sealed partial class ClusterOrchestrator
         var ssh = new SshNodeConnection(sshOptions, _processRunner);
         await ssh.InitializeAsync(ct).ConfigureAwait(false);
         return ssh;
+    }
+
+    private static (string User, string Host, int Port) ParseSshString(string input)
+    {
+        var user = "root";
+        var host = input.Trim();
+        var port = 22;
+
+        if (host.Contains('@', StringComparison.Ordinal))
+        {
+            var atParts = host.Split('@', 2);
+            user = atParts[0];
+            host = atParts[1];
+        }
+
+        if (host.Contains(':', StringComparison.Ordinal))
+        {
+            var colonParts = host.Split(':', 2);
+            host = colonParts[0];
+            if (int.TryParse(colonParts[1], CultureInfo.InvariantCulture, out var p))
+            {
+                port = p;
+            }
+        }
+
+        return (user, host, port);
     }
 
     /// <summary>
@@ -15859,6 +16162,13 @@ public sealed partial class ClusterOrchestrator
         CancellationToken ct)
     {
         var dnsProvider = ResolveDnsProvider(config);
+
+        if (string.Equals(action.Target, "domains", StringComparison.OrdinalIgnoreCase) || config.Root.ContainsKey("domains"))
+        {
+            await DomainRoutingService.SynchronizeDomainsAsync(config, nodes, dnsProvider, logger, ct).ConfigureAwait(false);
+            return;
+        }
+
         if (dnsProvider == null)
         {
             logger?.Invoke($"DNS provider is not configured. Skipping DNS update for '{action.Target}'.");
@@ -15989,19 +16299,94 @@ public sealed partial class ClusterOrchestrator
             ?? serviceObj["healthcheck_endpoint"]?.ToString()
             ?? serviceObj["healthcheckEndpoint"]?.ToString();
 
+        var replicas = serviceObj.TryGetPropertyValue("replicas", out var repVal) &&
+                       int.TryParse(repVal?.ToString(), CultureInfo.InvariantCulture, out var rep)
+            ? rep
+            : 1;
+
+        var networks = ExtractStringList(serviceObj, "networks");
+        if (networks.Count == 0)
+        {
+            networks = ["default"];
+        }
+
         return new ServiceSpec
         {
             Name = serviceName,
             Image = image,
             Priority = priority,
             VipAddress = vipAddress,
+            Replicas = replicas,
+            TargetNode = serviceObj["node"]?.ToString(),
+            TargetNodes = ExtractStringList(serviceObj, "nodes"),
+            Networks = networks,
+            Egress = serviceObj["egress"]?.ToString() ?? "true",
             HealthcheckEndpoint = healthcheck,
             Ports = ExtractStringList(serviceObj, "ports"),
-            Volumes = ExtractStringList(serviceObj, "volumes"),
+            Volumes = ExtractServiceVolumes(serviceObj, config),
             Labels = ExtractStringDictionary(serviceObj, "labels"),
             Environment = ExtractServiceEnvironment(serviceName, serviceObj, config),
-            Files = ExtractServiceFiles(serviceName, serviceObj, config)
+            Files = ExtractServiceFiles(serviceName, serviceObj, config),
+            Command = serviceObj["command"]?.ToString() ?? serviceObj["cmd"]?.ToString(),
+            Entrypoint = serviceObj["entrypoint"]?.ToString(),
+            WorkingDir = serviceObj["working_dir"]?.ToString() ?? serviceObj["workdir"]?.ToString(),
+            User = serviceObj["user"]?.ToString(),
+            Hostname = serviceObj["hostname"]?.ToString(),
+            Domainname = serviceObj["domainname"]?.ToString(),
+            Restart = serviceObj["restart"]?.ToString() ?? "unless-stopped",
+            Privileged = bool.TryParse(serviceObj["privileged"]?.ToString(), out var prb) && prb,
+            CapAdd = ExtractStringList(serviceObj, "cap_add"),
+            CapDrop = ExtractStringList(serviceObj, "cap_drop"),
+            Devices = ExtractStringList(serviceObj, "devices"),
+            Sysctls = ExtractStringDictionary(serviceObj, "sysctls"),
+            ExtraHosts = ExtractStringList(serviceObj, "extra_hosts"),
+            NetworkMode = serviceObj["network_mode"]?.ToString(),
+            ShmSize = serviceObj.TryGetPropertyValue("shm_size", out var shm) && long.TryParse(shm?.ToString(), CultureInfo.InvariantCulture, out var shmBytes) ? shmBytes : null,
+            MemLimit = serviceObj["mem_limit"]?.ToString() ?? serviceObj["memory"]?.ToString(),
+            Cpus = serviceObj.TryGetPropertyValue("cpus", out var cpuVal) && double.TryParse(cpuVal?.ToString(), CultureInfo.InvariantCulture, out var cpus) ? cpus : null,
+            StopSignal = serviceObj["stop_signal"]?.ToString(),
+            StopGracePeriod = serviceObj.TryGetPropertyValue("stop_grace_period", out var sgp) && int.TryParse(sgp?.ToString(), CultureInfo.InvariantCulture, out var graceSec) ? graceSec : null
         };
+    }
+
+    private static List<string> ExtractServiceVolumes(JsonObject serviceObj, ConfigTree? config)
+    {
+        var result = new List<string>();
+
+        if (serviceObj["volumes"] is JsonArray arr)
+        {
+            foreach (var item in arr)
+            {
+                if (item != null && !string.IsNullOrWhiteSpace(item.ToString()))
+                {
+                    result.Add(item.ToString().Trim());
+                }
+            }
+            return result;
+        }
+
+        if (serviceObj["volumes"] is JsonObject volDict)
+        {
+            foreach (var (containerPath, volVal) in volDict)
+            {
+                if (volVal == null) continue;
+                var rawVal = volVal.ToString().Trim();
+                var cleanName = rawVal.StartsWith("$volumes.", StringComparison.OrdinalIgnoreCase)
+                    ? rawVal.Substring("$volumes.".Length)
+                    : rawVal;
+
+                var hostPath = cleanName;
+                if (config?.Root["volumes"]?[cleanName] is JsonObject definedVol &&
+                    definedVol.TryGetPropertyValue("path", out var p) && p != null)
+                {
+                    hostPath = p.ToString();
+                }
+
+                result.Add($"{hostPath}:{containerPath}");
+            }
+        }
+
+        return result;
     }
 
     private static List<string> ExtractStringList(JsonObject obj, string propertyName)
@@ -16066,7 +16451,16 @@ public sealed partial class ClusterOrchestrator
                 var raw = contentVal?.ToString() ?? string.Empty;
                 var fileContent = raw;
 
-                if (File.Exists(raw))
+                if (raw.StartsWith("$files.", StringComparison.OrdinalIgnoreCase) && config != null)
+                {
+                    var fileKey = raw.Substring("$files.".Length).TrimStart('[').TrimEnd(']').Trim('\'', '"');
+                    var fromConfig = config.Root["files"]?[fileKey]?.ToString() ?? config.FindNode(raw.Substring(1))?.ToString();
+                    if (!string.IsNullOrEmpty(fromConfig))
+                    {
+                        fileContent = fromConfig;
+                    }
+                }
+                else if (File.Exists(raw))
                 {
                     fileContent = File.ReadAllText(raw);
                 }
@@ -16498,7 +16892,7 @@ public sealed partial class ClusterOrchestrator
             var nodeObj = config.Root["nodes"]?[node.NodeName] as JsonObject;
 
             var vpnIp = nodeObj?["vpn_ip"]?.ToString() ?? DefaultWireGuardIp;
-            var isPublic = nodeObj?["is_public"]?.GetValue<bool>() ?? false;
+            var isPublic = bool.TryParse(nodeObj?["is_public"]?.ToString(), out var ipb) && ipb;
 
             var (privKey, pubKey) = await ResolveWireGuardKeysForNodeAsync(node, nodeObj, ct).ConfigureAwait(false);
 
@@ -16633,22 +17027,71 @@ public sealed partial class ClusterOrchestrator
         var forwards = new List<PortForwardRule>();
         var publicPorts = new HashSet<int>();
 
-        if (!config.Root.TryGetPropertyValue("services", out var servicesNode) || servicesNode is not JsonObject servicesObj)
+        if (config.Root.TryGetPropertyValue("services", out var servicesNode) && servicesNode is JsonObject servicesObj)
         {
-            return (forwards, publicPorts.ToList());
+            foreach (var (_, svcVal) in servicesObj)
+            {
+                if (svcVal is not JsonObject sObj)
+                {
+                    continue;
+                }
+
+                ParseServicePortForwards(sObj, forwards, publicPorts);
+            }
         }
 
-        foreach (var (_, svcVal) in servicesObj)
+        if (config.Root.TryGetPropertyValue("ports", out var rootPortsNode) && rootPortsNode is JsonObject rootPortsObj)
         {
-            if (svcVal is not JsonObject sObj)
+            ParseNamedPortsDictionary(config, rootPortsObj, forwards, publicPorts);
+        }
+
+        return (forwards, publicPorts.ToList());
+    }
+
+    private static void ParseNamedPortsDictionary(
+        ConfigTree config,
+        JsonObject rootPortsObj,
+        List<PortForwardRule> forwards,
+        HashSet<int> publicPorts)
+    {
+        foreach (var (_, ruleVal) in rootPortsObj)
+        {
+            if (ruleVal is not JsonObject rObj) continue;
+            var fromStr = rObj["from"]?.ToString();
+            var toStr = rObj["to"]?.ToString();
+            var proto = rObj["proto"]?.ToString() ?? "tcp";
+
+            if (string.IsNullOrEmpty(fromStr) || string.IsNullOrEmpty(toStr)) continue;
+
+            var fromColon = fromStr.LastIndexOf(':');
+            if (fromColon <= 0 || !int.TryParse(fromStr[(fromColon + 1)..], CultureInfo.InvariantCulture, out var hostPort))
             {
                 continue;
             }
 
-            ParseServicePortForwards(sObj, forwards, publicPorts);
-        }
+            publicPorts.Add(hostPort);
 
-        return (forwards, publicPorts.ToList());
+            var toColon = toStr.LastIndexOf(':');
+            var targetHost = toColon > 0 ? toStr[..toColon] : toStr;
+            var targetPort = toColon > 0 && int.TryParse(toStr[(toColon + 1)..], CultureInfo.InvariantCulture, out var tp) ? tp : hostPort;
+
+            var targetVip = targetHost;
+            if (targetHost.StartsWith("$ingress", StringComparison.OrdinalIgnoreCase) || string.Equals(targetHost, "ingress", StringComparison.OrdinalIgnoreCase))
+            {
+                targetVip = "fd67:b00b:0001:ffff::1";
+            }
+            else if (config.Root["services"]?[targetHost] is JsonObject targetSvc)
+            {
+                targetVip = targetSvc["vip"]?.ToString() ?? targetHost;
+            }
+
+            forwards.Add(new PortForwardRule(
+                HostPort: hostPort,
+                Protocol: proto,
+                TargetVip: targetVip,
+                TargetPort: targetPort,
+                AddressFamily: fromStr.Contains("ipv6", StringComparison.OrdinalIgnoreCase) ? "ipv6" : (fromStr.Contains("ipv4", StringComparison.OrdinalIgnoreCase) ? "ipv4" : "any")));
+        }
     }
 
     private static void ParseServicePortForwards(
@@ -16839,6 +17282,254 @@ public sealed partial class ClusterOrchestrator
         }
 
         return null;
+    }
+}
+```
+
+## File: src/Starry.Infrastructure/Orchestration/DomainRoutingService.cs
+
+**Lines**: 241 | **Size**: 8.4 KB | **Language**: csharp
+
+```csharp
+using System.Globalization;
+using System.Text.Json.Nodes;
+using Starry.Core.Configuration;
+using Starry.Core.Dns;
+using Starry.Core.Nodes;
+using Starry.Core.Processes;
+using Starry.Dsl;
+using Starry.Infrastructure.Dns;
+
+namespace Starry.Infrastructure.Orchestration;
+
+public sealed record ResolvedDomainRoute(
+    string FullHostname,
+    string ZoneDomain,
+    string? HttpTarget,
+    string? SniTarget,
+    bool ProxyProtocol,
+    string? TargetNode,
+    string? DnsProviderKey,
+    int EntryPort);
+
+/// <summary>
+/// Traverses hierarchical domains graph (TLD -> domain -> subdomains), resolving inherited properties,
+/// Cloudflare Origin Rules, and Nginx L4 SNI / L7 reverse-proxy routes.
+/// </summary>
+public static class DomainRoutingService
+{
+    public static List<ResolvedDomainRoute> TraverseDomains(ConfigTree config)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+
+        if (!config.Root.TryGetPropertyValue("domains", out var domNode) || domNode is not JsonObject domObj)
+        {
+            return [];
+        }
+
+        var results = new List<ResolvedDomainRoute>();
+        foreach (var (tld, tldVal) in domObj)
+        {
+            if (tldVal is JsonObject tldObj)
+            {
+                TraverseBranch(tldObj, [tld], inheritedNode: null, inheritedProvider: null, inheritedPort: 443, config, results);
+            }
+        }
+
+        return results;
+    }
+
+    private static void TraverseBranch(
+        JsonObject currentObj,
+        List<string> pathSegments,
+        string? inheritedNode,
+        string? inheritedProvider,
+        int inheritedPort,
+        ConfigTree config,
+        List<ResolvedDomainRoute> results)
+    {
+        var node = currentObj["node"]?.ToString() ?? inheritedNode;
+        var provider = currentObj["dns_provider"]?.ToString() ?? inheritedProvider;
+        var port = ResolvePort(currentObj["port"], inheritedPort, config);
+
+        var isLeaf = currentObj.ContainsKey("http") || currentObj.ContainsKey("sni");
+
+        if (isLeaf)
+        {
+            var hostname = BuildHostname(pathSegments);
+            var zone = ResolveZoneDomain(hostname);
+            var http = currentObj["http"]?.ToString();
+            var sni = currentObj["sni"]?.ToString();
+            var proxyProtocol = bool.TryParse(currentObj["proxy_protocol"]?.ToString(), out var pp) && pp;
+
+            results.Add(new ResolvedDomainRoute(
+                FullHostname: hostname,
+                ZoneDomain: zone,
+                HttpTarget: http,
+                SniTarget: sni,
+                ProxyProtocol: proxyProtocol,
+                TargetNode: node,
+                DnsProviderKey: provider,
+                EntryPort: port));
+        }
+
+        foreach (var (k, v) in currentObj)
+        {
+            if (k is "node" or "dns_provider" or "cert" or "port" or "http" or "sni" or "proxy_protocol" or "proxied")
+            {
+                continue;
+            }
+
+            if (v is JsonObject childObj)
+            {
+                var nextSegments = new List<string>(pathSegments) { k };
+                TraverseBranch(childObj, nextSegments, node, provider, port, config, results);
+            }
+        }
+    }
+
+    private static string BuildHostname(List<string> segments)
+    {
+        var filtered = segments.Where(s => s != "@").Reverse().ToList();
+        return string.Join(".", filtered);
+    }
+
+    private static string ResolveZoneDomain(string hostname)
+    {
+        var parts = hostname.Split('.');
+        if (parts.Length <= 2)
+        {
+            return hostname;
+        }
+
+        return $"{parts[^2]}.{parts[^1]}";
+    }
+
+    private static int ResolvePort(JsonNode? portNode, int defaultPort, ConfigTree config)
+    {
+        if (portNode == null)
+        {
+            return defaultPort;
+        }
+
+        if (portNode is JsonObject portObj)
+        {
+            var from = portObj["from"]?.ToString();
+            if (!string.IsNullOrEmpty(from))
+            {
+                var colon = from.LastIndexOf(':');
+                if (colon > 0 && int.TryParse(from[(colon + 1)..], CultureInfo.InvariantCulture, out var parsed))
+                {
+                    return parsed;
+                }
+            }
+        }
+
+        var portStr = portNode.ToString();
+        if (int.TryParse(portStr, CultureInfo.InvariantCulture, out var p))
+        {
+            return p;
+        }
+
+        if (portStr.StartsWith("$ports.", StringComparison.OrdinalIgnoreCase))
+        {
+            var ruleKey = portStr.Substring("$ports.".Length);
+            var fromStr = config.Root["ports"]?[ruleKey]?["from"]?.ToString();
+            if (!string.IsNullOrEmpty(fromStr))
+            {
+                var colon = fromStr.LastIndexOf(':');
+                if (colon > 0 && int.TryParse(fromStr[(colon + 1)..], CultureInfo.InvariantCulture, out var parsed))
+                {
+                    return parsed;
+                }
+            }
+        }
+
+        return defaultPort;
+    }
+
+    public static async Task SynchronizeDomainsAsync(
+        ConfigTree config,
+        IReadOnlyList<INodeConnection> nodes,
+        IDnsProvider? dnsProvider,
+        Action<string>? logger,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        ArgumentNullException.ThrowIfNull(nodes);
+
+        var routes = TraverseDomains(config);
+        if (routes.Count == 0)
+        {
+            return;
+        }
+
+        var nginxRoutes = new List<Generators.NginxRoute>();
+
+        foreach (var r in routes)
+        {
+            if (!string.IsNullOrEmpty(r.SniTarget))
+            {
+                nginxRoutes.Add(Generators.NginxRoute.NewSniPassthrough(r.FullHostname, r.SniTarget, r.ProxyProtocol));
+            }
+            else if (!string.IsNullOrEmpty(r.HttpTarget))
+            {
+                var parts = r.HttpTarget.Split(':');
+                var host = parts[0];
+                var port = parts.Length > 1 && int.TryParse(parts[1], CultureInfo.InvariantCulture, out var p) ? p : 80;
+
+                nginxRoutes.Add(Generators.NginxRoute.NewHttpReverseProxy(
+                    r.FullHostname,
+                    host,
+                    port,
+                    Microsoft.FSharp.Core.FSharpOption<string>.None,
+                    Microsoft.FSharp.Core.FSharpOption<string>.None));
+            }
+
+            if (dnsProvider != null)
+            {
+                var targetIp = "127.0.0.1";
+                if (!string.IsNullOrEmpty(r.TargetNode))
+                {
+                    var cleanNode = r.TargetNode.StartsWith("$nodes.", StringComparison.OrdinalIgnoreCase)
+                        ? r.TargetNode.Substring("$nodes.".Length)
+                        : r.TargetNode;
+
+                    var nodeConn = nodes.FirstOrDefault(n => string.Equals(n.NodeName, cleanNode, StringComparison.OrdinalIgnoreCase));
+                    if (nodeConn != null)
+                    {
+                        targetIp = nodeConn.Host;
+                    }
+                }
+
+                logger?.Invoke($"Registering DNS record for '{r.FullHostname}' in zone '{r.ZoneDomain}' -> {targetIp}...");
+                var record = new DnsRecord(Guid.NewGuid().ToString("N"), "A", r.FullHostname, targetIp, 120, Proxied: true);
+                await dnsProvider.UpsertRecordAsync(r.ZoneDomain, record, ct).ConfigureAwait(false);
+
+                if (dnsProvider is CloudflareDnsProvider cf && r.EntryPort != 443)
+                {
+                    logger?.Invoke($"Configuring Cloudflare Origin Rule for '{r.FullHostname}' rewriting origin port to {r.EntryPort}...");
+                    await cf.ConfigureOriginRuleAsync(r.ZoneDomain, r.FullHostname, r.EntryPort, ct).ConfigureAwait(false);
+                }
+            }
+        }
+
+        // If ingress routes were compiled, generate Nginx config
+        if (nginxRoutes.Count > 0)
+        {
+            var nginxConf = Generators.generateNginxConfig(1, Microsoft.FSharp.Collections.ListModule.OfSeq(nginxRoutes));
+            logger?.Invoke($"Compiled Nginx Ingress proxy config for {nginxRoutes.Count} route(s).");
+            if (nodes.Count > 0)
+            {
+                var targetNode = nodes[0];
+                await targetNode.ExecuteCommandAsync(new ProcessSpec
+                {
+                    Executable = "sh",
+                    Arguments = ["-c", "mkdir -p /etc/nginx && cat > /etc/nginx/nginx.conf && (nginx -s reload 2>/dev/null || true)"],
+                    StandardInputBytes = System.Text.Encoding.UTF8.GetBytes(nginxConf)
+                }, ct).ConfigureAwait(false);
+            }
+        }
     }
 }
 ```
@@ -17837,7 +18528,7 @@ public sealed record MigrationPlan(
 
 ## File: src/Starry.Infrastructure/Orchestration/MigrationPlanner.cs
 
-**Lines**: 142 | **Size**: 5.5 KB | **Language**: csharp
+**Lines**: 165 | **Size**: 6.5 KB | **Language**: csharp
 
 ```csharp
 using System.Globalization;
@@ -17864,6 +18555,7 @@ public static class MigrationPlanner
         var nodeCount = PlanNodeActions(desiredConfig, actions);
         PlanNetworkActions(nodeCount, actions);
         PlanServiceActions(desiredConfig, currentServiceNodePlacements, actions, onlyChangedServices);
+        PlanDnsActions(desiredConfig, actions);
 
         var sortedActions = actions
             .OrderBy(a => a.Priority)
@@ -17979,6 +18671,28 @@ public static class MigrationPlanner
                     Priority: 50 + priority,
                     Dependencies: ["network:wireguard:mesh", "network:nftables:ruleset"]));
             }
+        }
+    }
+
+    private static void PlanDnsActions(ConfigTree desiredConfig, List<PlanAction> actions)
+    {
+        if (desiredConfig.Root.TryGetPropertyValue("domains", out var domNode) && domNode is JsonObject)
+        {
+            actions.Add(new PlanAction(
+                Id: "dns:domains:sync",
+                ActionType: PlanActionType.UpdateDns,
+                Target: "domains",
+                Description: "Synchronize hierarchical domains, certificates, and Cloudflare origin rules",
+                Priority: 95));
+        }
+        else if (desiredConfig.Root.TryGetPropertyValue("dns", out var dnsNode) && dnsNode is JsonObject)
+        {
+            actions.Add(new PlanAction(
+                Id: "dns:cluster:sync",
+                ActionType: PlanActionType.UpdateDns,
+                Target: "dns",
+                Description: "Synchronize DNS records with configured DNS provider",
+                Priority: 95));
         }
     }
 }
@@ -20995,6 +21709,257 @@ public class LiveMultiNodeSshClusterE2ETests
   </ItemGroup>
 
 </Project>
+```
+
+## File: tests/Starry.E2ETests/V3PipelineIntegrationTests.cs
+
+**Lines**: 244 | **Size**: 10.0 KB | **Language**: csharp
+
+```csharp
+using System.Globalization;
+using System.Text.Json.Nodes;
+using Starry.Core.Configuration;
+using Starry.Core.Dns;
+using Starry.Core.Nodes;
+using Starry.Core.Processes;
+using Starry.Infrastructure.Configuration;
+using Starry.Infrastructure.Dns;
+using Starry.Infrastructure.Network;
+using Starry.Infrastructure.Orchestration;
+using Xunit;
+
+namespace Starry.E2ETests;
+
+public class V3PipelineIntegrationTests
+{
+    private sealed class MockTestNodeConnection(string name, string host) : INodeConnection
+    {
+        public string NodeName => name;
+        public string Host => host;
+        public int Port => 22;
+        public string? DistroId => "alpine";
+        public List<string> ExecutedCommands { get; } = [];
+
+        public Task<ProcessResult> ExecuteCommandAsync(ProcessSpec command, CancellationToken ct = default)
+        {
+            ExecutedCommands.Add($"{command.Executable} {string.Join(" ", command.Arguments)}");
+            return Task.FromResult(new ProcessResult(0, "success", string.Empty, TimeSpan.Zero));
+        }
+
+        public Task<ProcessResult> ExecuteStreamingCommandAsync(ProcessSpec command, Stream? stdinStream, Stream? stdoutStream, CancellationToken ct = default)
+        {
+            ExecutedCommands.Add($"{command.Executable} {string.Join(" ", command.Arguments)}");
+            return Task.FromResult(new ProcessResult(0, "success", string.Empty, TimeSpan.Zero));
+        }
+
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope", Justification = "HttpClient owns handler")]
+        public Task<HttpClient> CreateSocketHttpClientAsync(string socketPath, CancellationToken ct = default)
+        {
+            var handler = new MockV3DockerHandler();
+            return Task.FromResult(new HttpClient(handler, disposeHandler: true));
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class MockV3DockerHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var path = request.RequestUri?.PathAndQuery ?? string.Empty;
+            if (path.Contains("/containers/json", StringComparison.Ordinal))
+            {
+                return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+                {
+                    Content = new StringContent("[{\"Id\":\"c1\",\"Names\":[\"/shop-web\"],\"State\":\"running\",\"Status\":\"Up\"}]")
+                });
+            }
+
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"Id\":\"c1\"}")
+            });
+        }
+    }
+
+    private sealed class MockMockCfDnsProvider : IDnsProvider
+    {
+        public string ProviderName => "cloudflare-mock";
+        public List<(string Zone, DnsRecord Record)> UpsertedRecords { get; } = [];
+        public List<(string Zone, string Hostname, int Port)> OriginRules { get; } = [];
+
+        public Task<IReadOnlyList<DnsRecord>> GetRecordsAsync(string zoneDomain, CancellationToken ct = default)
+        {
+            return Task.FromResult<IReadOnlyList<DnsRecord>>([]);
+        }
+
+        public Task UpsertRecordAsync(string zoneDomain, DnsRecord record, CancellationToken ct = default)
+        {
+            UpsertedRecords.Add((zoneDomain, record));
+            return Task.CompletedTask;
+        }
+
+        public Task DeleteRecordAsync(string zoneDomain, string recordId, CancellationToken ct = default)
+        {
+            return Task.CompletedTask;
+        }
+    }
+
+    [Fact]
+    public async Task V3Pipeline_LoadsDirectory_ResolvesGraph_AndExecutesPlanEndToEnd()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "starry_v3_e2e_" + Guid.NewGuid().ToString("N"));
+        var filesDir = Path.Combine(tempDir, "files");
+        var nodesDir = Path.Combine(tempDir, "nodes");
+        var servicesDir = Path.Combine(tempDir, "services");
+
+        Directory.CreateDirectory(tempDir);
+        Directory.CreateDirectory(filesDir);
+        Directory.CreateDirectory(nodesDir);
+        Directory.CreateDirectory(servicesDir);
+
+        try
+        {
+            const string starryYaml = """
+                version: "3.0"
+                cluster_name: "kessoku-v3"
+                mesh:
+                  prefix: "fd67:b00b::/32"
+                  port: 51820
+                  keepalive: 25
+
+                presets:
+                  base_app:
+                    restart: "always"
+                    working_dir: "/app"
+                    cap_add: ["NET_ADMIN"]
+                    shm_size: 67108864
+                    mem_limit: "512m"
+                    networks: ["app_net"]
+                    egress: "$nodes.germany"
+
+                volumes:
+                  pg_data:
+                    path: "/var/data/postgres"
+
+                ports:
+                  alt_web:
+                    from: "$nodes.finland.ipv4:8443"
+                    to: "shop-web:3000"
+
+                domains:
+                  rocks:
+                    bocchi:
+                      dns_provider: "cf"
+                      node: "$nodes.germany"
+                      shop:
+                        port: "$ports.alt_web"
+                        http: "shop-web:3000"
+                      vpn:
+                        sni: "xray:8443"
+                        proxy_protocol: true
+                """;
+
+            const string germanyYaml = """
+                ssh: "root@142.132.10.20:22"
+                is_public: true
+                """;
+
+            const string finlandYaml = """
+                ssh: "root@65.21.10.30:22"
+                is_public: true
+                """;
+
+            const string shopServiceYaml = """
+                $: "$presets.base_app"
+                image: "shop:v3"
+                node: "germany"
+                command: "node server.js"
+                volumes:
+                  /var/lib/postgresql/data: "$volumes.pg_data"
+                files:
+                  /etc/nginx/nginx.conf: "$files.['nginx.conf']"
+                """;
+
+            const string nginxConf = """
+                # Upstream for shop
+                upstream backend {
+                    server $nodes.germany.host:3000;
+                }
+                """;
+
+            await File.WriteAllTextAsync(Path.Combine(tempDir, "starry.yaml"), starryYaml);
+            await File.WriteAllTextAsync(Path.Combine(nodesDir, "germany.yaml"), germanyYaml);
+            await File.WriteAllTextAsync(Path.Combine(nodesDir, "finland.yaml"), finlandYaml);
+            await File.WriteAllTextAsync(Path.Combine(servicesDir, "shop-web.yaml"), shopServiceYaml);
+            await File.WriteAllTextAsync(Path.Combine(filesDir, "nginx.conf"), nginxConf);
+
+            // 1. Test VirtualConfigEngine.Load with automatic graph resolution
+            var engine = new VirtualConfigEngine();
+            var tree = engine.Load(tempDir);
+
+            // Verify files/* auto-loading and string interpolation
+            var loadedNginxConf = tree.Root["files"]?["nginx.conf"]?.ToString();
+            Assert.NotNull(loadedNginxConf);
+            Assert.Contains("server 142.132.10.20:3000;", loadedNginxConf, StringComparison.Ordinal);
+
+            // Verify $: object inheritance and property merging
+            var shopObj = tree.Root["services"]?["shop-web"] as JsonObject;
+            Assert.NotNull(shopObj);
+            Assert.Equal("always", shopObj["restart"]?.ToString());
+            Assert.Equal("/app", shopObj["working_dir"]?.ToString());
+            Assert.Equal("512m", shopObj["mem_limit"]?.ToString());
+
+            // 2. Test Domain Routing Traversal
+            var routes = DomainRoutingService.TraverseDomains(tree);
+            Assert.Equal(2, routes.Count);
+
+            var shopRoute = routes.FirstOrDefault(r => r.FullHostname == "shop.bocchi.rocks");
+            Assert.NotNull(shopRoute);
+            Assert.Equal("bocchi.rocks", shopRoute.ZoneDomain);
+            Assert.Equal("shop-web:3000", shopRoute.HttpTarget);
+            Assert.Equal(8443, shopRoute.EntryPort);
+
+            var vpnRoute = routes.FirstOrDefault(r => r.FullHostname == "vpn.bocchi.rocks");
+            Assert.NotNull(vpnRoute);
+            Assert.Equal("xray:8443", vpnRoute.SniTarget);
+            Assert.True(vpnRoute.ProxyProtocol);
+
+            // 3. Test MigrationPlanner DAG generation
+            var plan = MigrationPlanner.BuildPlan(tree);
+            Assert.Contains(plan.Actions, a => a.ActionType == PlanActionType.CreateNode);
+            Assert.Contains(plan.Actions, a => a.ActionType == PlanActionType.ConfigureWireGuardMesh);
+            Assert.Contains(plan.Actions, a => a.ActionType == PlanActionType.ConfigureNftables);
+            Assert.Contains(plan.Actions, a => a.ActionType == PlanActionType.DeployService);
+            Assert.Contains(plan.Actions, a => a.ActionType == PlanActionType.UpdateDns);
+
+            // 4. Test ClusterOrchestrator Execution
+            var mockDns = new MockMockCfDnsProvider();
+            var orchestrator = new ClusterOrchestrator(dnsProvider: mockDns);
+
+            await using var node1 = new MockTestNodeConnection("germany", "142.132.10.20");
+            await using var node2 = new MockTestNodeConnection("finland", "65.21.10.30");
+
+            await orchestrator.ExecutePlanAsync(plan, tree, [node1, node2]);
+
+            // Verify DNS records were upserted
+            Assert.Contains(mockDns.UpsertedRecords, r => r.Record.Name == "shop.bocchi.rocks" && r.Zone == "bocchi.rocks");
+
+            // 5. Test Split with v3 structures
+            var splitDir = Path.Combine(tempDir, "split_output");
+            engine.Split(tree, splitDir, "yaml");
+
+            Assert.True(File.Exists(Path.Combine(splitDir, "ports.yaml")));
+            Assert.True(File.Exists(Path.Combine(splitDir, "volumes.yaml")));
+            Assert.True(File.Exists(Path.Combine(splitDir, "domains", "domains.yaml")));
+            Assert.True(File.Exists(Path.Combine(splitDir, "files", "nginx.conf")));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+}
 ```
 
 ## File: tests/Starry.UnitTests/ConfigValidatorTests.cs

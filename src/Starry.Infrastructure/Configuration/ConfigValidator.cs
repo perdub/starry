@@ -39,9 +39,12 @@ public static class ConfigValidator
                     continue;
                 }
 
-                if (!nodeObj.TryGetPropertyValue("host", out var hostVal) || hostVal == null || string.IsNullOrWhiteSpace(hostVal.ToString()))
+                var hasHost = nodeObj.TryGetPropertyValue("host", out var hostVal) && hostVal != null && !string.IsNullOrWhiteSpace(hostVal.ToString());
+                var hasSsh = nodeObj.TryGetPropertyValue("ssh", out var sshVal) && sshVal != null && !string.IsNullOrWhiteSpace(sshVal.ToString());
+
+                if (!hasHost && !hasSsh)
                 {
-                    issues.Add(new ValidationIssue($"{nodePath}.host", $"Node '{nodeName}' is missing required 'host' address.", sourceEntry?.FilePath));
+                    issues.Add(new ValidationIssue($"{nodePath}.host", $"Node '{nodeName}' is missing required 'host' address or 'ssh' connection string.", sourceEntry?.FilePath));
                 }
 
                 if (nodeObj.TryGetPropertyValue("port", out var portVal) && portVal != null &&

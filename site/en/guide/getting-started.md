@@ -131,20 +131,16 @@ During the bootstrap process, Starry will:
 Edit your `starry.yaml` file to define desired state:
 
 ```yaml
-version: "1.0"
+version: "3.0"
 
 mesh:
-  cidr: "10.42.0.0/16"
+  prefix: "fd67:b00b::/32"
   port: 51820
 
 nodes:
   node-01:
-    host: "203.0.113.10"
-    vpn_ip: "10.42.0.1"
+    ssh: "root@203.0.113.10:22"
     engine: "docker"
-    packages:
-      - curl
-      - htop
 
 services:
   web:
@@ -153,7 +149,7 @@ services:
     ports:
       - "80:80"
     env:
-      API_SECRET: "ENC[AES256_GCM,data:...,iv:...,tag:...]"
+      API_SECRET: "ENC[AES256_GCM:v1:...]"
 ```
 
 ### Dry Run (Plan)

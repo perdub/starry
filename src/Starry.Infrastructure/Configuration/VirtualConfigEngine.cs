@@ -1,12 +1,13 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Starry.Core.Configuration;
+using Starry.Dsl;
 
 namespace Starry.Infrastructure.Configuration;
 
 /// <summary>
 /// Virtual Configuration Engine for loading, merging, packing, splitting,
-/// formatting, and validating multi-file configuration trees with Source Map tracking.
+/// formatting, resolving AST graph references via Starry.Dsl, and validating configuration trees.
 /// </summary>
 public sealed class VirtualConfigEngine
 {
@@ -28,21 +29,69 @@ public sealed class VirtualConfigEngine
         }
     }
 
-    public ConfigTree Load(string path)
+    public ConfigTree Load(string path, bool resolveGraph = true, Func<string, string>? secretDecryptor = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
+        ConfigTree tree;
         if (File.Exists(path))
         {
-            return LoadFile(path);
+            tree = LoadFile(path);
         }
-
-        if (Directory.Exists(path))
+        else if (Directory.Exists(path))
         {
-            return LoadDirectory(path);
+            tree = LoadDirectory(path);
+        }
+        else
+        {
+            throw new FileNotFoundException($"Configuration path does not exist: {path}", path);
         }
 
-        throw new FileNotFoundException($"Configuration path does not exist: {path}", path);
+        if (resolveGraph)
+        {
+            ResolveGraph(tree, secretDecryptor);
+        }
+
+        return tree;
+    }
+
+    public void ResolveGraph(ConfigTree tree, Func<string, string>? secretDecryptor = null)
+    {
+        ArgumentNullException.ThrowIfNull(tree);
+
+        var optDecryptor = secretDecryptor != null
+            ? Microsoft.FSharp.Core.FSharpOption<Microsoft.FSharp.Core.FSharpFunc<string, string>>.Some(
+                Microsoft.FSharp.Core.FuncConvert.FromFunc<string, string>(secretDecryptor))
+            : Microsoft.FSharp.Core.FSharpOption<Microsoft.FSharp.Core.FSharpFunc<string, string>>.None;
+
+        var configNode = ConfigAst.fromJsonNode(Microsoft.FSharp.Core.FSharpOption<string>.None, tree.Root);
+        var resolvedResult = GraphResolver.resolve(configNode, optDecryptor);
+
+        if (resolvedResult.IsError)
+        {
+            var err = resolvedResult.ErrorValue;
+            if (err.IsCircularReference)
+            {
+                var chain = string.Join(" -> ", ((GraphResolver.ResolutionError.CircularReference)err).cycleChain);
+                throw new InvalidOperationException($"Circular dependency detected in configuration graph: {chain}");
+            }
+
+            throw new InvalidOperationException($"Failed to resolve configuration graph references: {err}");
+        }
+
+        if (ConfigAst.toJsonNode(resolvedResult.ResultValue) is JsonObject resolvedJson)
+        {
+            var keys = tree.Root.Select(kv => kv.Key).ToList();
+            foreach (var key in keys)
+            {
+                tree.Root.Remove(key);
+            }
+
+            foreach (var (k, v) in resolvedJson)
+            {
+                tree.Root[k] = v != null ? JsonNode.Parse(v.ToJsonString()) : null;
+            }
+        }
     }
 
     private ConfigTree LoadFile(string filePath)
@@ -77,42 +126,107 @@ public sealed class VirtualConfigEngine
 
         foreach (var file in files)
         {
-            var relative = Path.GetRelativePath(dirPath, file).Replace('\\', '/');
-            var provider = FindProviderForFile(file);
-            var bytes = File.ReadAllBytes(file);
-            var parsed = provider.Parse(bytes, relative);
+            LoadSingleConfigFile(tree, dirPath, file);
+        }
 
-            var pathWithoutExt = Path.Combine(
-                Path.GetDirectoryName(relative) ?? string.Empty,
-                Path.GetFileNameWithoutExtension(relative)).Replace('\\', '/');
+        LoadRawFilesDirectory(tree, dirPath);
 
-            var fileNameWithoutExt = Path.GetFileNameWithoutExtension(relative);
+        return tree;
+    }
 
-            if (string.Equals(fileNameWithoutExt, "starry", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(fileNameWithoutExt, "config", StringComparison.OrdinalIgnoreCase))
+    private void LoadSingleConfigFile(ConfigTree tree, string dirPath, string file)
+    {
+        var relative = Path.GetRelativePath(dirPath, file).Replace('\\', '/');
+        var provider = FindProviderForFile(file);
+        var bytes = File.ReadAllBytes(file);
+        var parsed = provider.Parse(bytes, relative);
+
+        var dirName = Path.GetDirectoryName(relative);
+        var fileNameNoExt = Path.GetFileNameWithoutExtension(relative);
+
+        if (string.IsNullOrEmpty(dirName) &&
+            (string.Equals(fileNameNoExt, "starry", StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(fileNameNoExt, "config", StringComparison.OrdinalIgnoreCase)))
+        {
+            if (parsed is JsonObject rootObj)
             {
-                // Root-level configuration file merges directly into root
-                if (parsed is JsonObject rootObj)
+                PopulateObjectIntoTree(tree, rootObj, string.Empty, relative);
+            }
+        }
+        else
+        {
+            var pathWithoutExt = Path.Combine(dirName ?? string.Empty, fileNameNoExt).Replace('\\', '/');
+            var canonicalPrefix = pathWithoutExt.Replace('/', '.');
+            if (parsed is JsonObject obj)
+            {
+                if (string.Equals(dirName, "nodes", StringComparison.OrdinalIgnoreCase) &&
+                    obj.TryGetPropertyValue("ssh", out var sshVal) && sshVal != null &&
+                    (!obj.ContainsKey("host") || string.IsNullOrWhiteSpace(obj["host"]?.ToString())))
                 {
-                    PopulateObjectIntoTree(tree, rootObj, string.Empty, relative);
+                    var (u, h, p) = ParseSsh(sshVal.ToString());
+                    obj["host"] = h;
+                    obj["port"] = p;
+                    obj["user"] = u;
                 }
+
+                PopulateObjectIntoTree(tree, obj, canonicalPrefix, relative);
             }
             else
             {
-                // Hierarchy mapping: nodes/bocchi.yaml -> root.nodes.bocchi
-                var canonicalPrefix = pathWithoutExt.Replace('/', '.');
-                if (parsed is JsonObject obj)
-                {
-                    PopulateObjectIntoTree(tree, obj, canonicalPrefix, relative);
-                }
-                else
-                {
-                    tree.SetNode(canonicalPrefix, parsed, new SourceMapEntry(canonicalPrefix, relative));
-                }
+                tree.SetNode(canonicalPrefix, parsed, new SourceMapEntry(canonicalPrefix, relative));
+            }
+        }
+    }
+
+    private static (string User, string Host, int Port) ParseSsh(string input)
+    {
+        var user = "root";
+        var host = input.Trim();
+        var port = 22;
+
+        if (host.Contains('@', StringComparison.Ordinal))
+        {
+            var atParts = host.Split('@', 2);
+            user = atParts[0];
+            host = atParts[1];
+        }
+
+        if (host.Contains(':', StringComparison.Ordinal))
+        {
+            var colonParts = host.Split(':', 2);
+            host = colonParts[0];
+            if (int.TryParse(colonParts[1], System.Globalization.CultureInfo.InvariantCulture, out var p))
+            {
+                port = p;
             }
         }
 
-        return tree;
+        return (user, host, port);
+    }
+
+    private static void LoadRawFilesDirectory(ConfigTree tree, string dirPath)
+    {
+        var filesDir = Path.Combine(dirPath, "files");
+        if (!Directory.Exists(filesDir))
+        {
+            return;
+        }
+
+        if (tree.Root["files"] is not JsonObject filesObj)
+        {
+            filesObj = new JsonObject();
+            tree.Root["files"] = filesObj;
+        }
+
+        var rawFiles = Directory.GetFiles(filesDir, "*.*", SearchOption.AllDirectories);
+        foreach (var rf in rawFiles)
+        {
+            var rel = Path.GetRelativePath(dirPath, rf).Replace('\\', '/');
+            var relInsideFiles = Path.GetRelativePath(filesDir, rf).Replace('\\', '/');
+            var content = File.ReadAllText(rf);
+            filesObj[relInsideFiles] = JsonValue.Create(content);
+            tree.RegisterSource($"files.{relInsideFiles}", new SourceMapEntry($"files.{relInsideFiles}", rel));
+        }
     }
 
     private static bool IsExcludedConfigPath(string rootDir, string fullPath)
@@ -150,7 +264,6 @@ public sealed class VirtualConfigEngine
             }
             else
             {
-                // Clone the node so it can be re-parented into the tree
                 var clonedVal = propVal != null ? JsonNode.Parse(propVal.ToJsonString()) : null;
                 tree.SetNode(currentPath, clonedVal, new SourceMapEntry(currentPath, filePath));
             }
@@ -186,48 +299,85 @@ public sealed class VirtualConfigEngine
 
         var provider = FindProviderByName(format);
         var ext = provider.SupportedExtensions[0];
-
         var rootCopy = new JsonObject();
 
         foreach (var (key, val) in tree.Root)
         {
-            if (string.Equals(key, "nodes", StringComparison.OrdinalIgnoreCase) && val is JsonObject nodesObj)
-            {
-                var nodesDir = Path.Combine(targetDirectoryPath, "nodes");
-                Directory.CreateDirectory(nodesDir);
-                foreach (var (nodeName, nodeVal) in nodesObj)
-                {
-                    if (nodeVal != null)
-                    {
-                        var filePath = Path.Combine(nodesDir, $"{nodeName}{ext}");
-                        File.WriteAllText(filePath, provider.Serialize(nodeVal));
-                    }
-                }
-            }
-            else if (string.Equals(key, "services", StringComparison.OrdinalIgnoreCase) && val is JsonObject servicesObj)
-            {
-                var servicesDir = Path.Combine(targetDirectoryPath, "services");
-                Directory.CreateDirectory(servicesDir);
-                foreach (var (svcName, svcVal) in servicesObj)
-                {
-                    if (svcVal != null)
-                    {
-                        var filePath = Path.Combine(servicesDir, $"{svcName}{ext}");
-                        File.WriteAllText(filePath, provider.Serialize(svcVal));
-                    }
-                }
-            }
-            else
-            {
-                if (val != null)
-                {
-                    rootCopy[key] = JsonNode.Parse(val.ToJsonString());
-                }
-            }
+            SplitSubtreeProperty(targetDirectoryPath, key, val, ext, provider, rootCopy);
         }
 
         var mainConfigPath = Path.Combine(targetDirectoryPath, $"starry{ext}");
         File.WriteAllText(mainConfigPath, provider.Serialize(rootCopy));
+    }
+
+    private static void SplitSubtreeProperty(
+        string targetDirectoryPath,
+        string key,
+        JsonNode? val,
+        string ext,
+        IConfigFormatProvider provider,
+        JsonObject rootCopy)
+    {
+        if (string.Equals(key, "nodes", StringComparison.OrdinalIgnoreCase) && val is JsonObject nodesObj)
+        {
+            WriteDirectorySubtree(Path.Combine(targetDirectoryPath, "nodes"), nodesObj, ext, provider);
+        }
+        else if (string.Equals(key, "services", StringComparison.OrdinalIgnoreCase) && val is JsonObject servicesObj)
+        {
+            WriteDirectorySubtree(Path.Combine(targetDirectoryPath, "services"), servicesObj, ext, provider);
+        }
+        else if (string.Equals(key, "domains", StringComparison.OrdinalIgnoreCase) && val != null)
+        {
+            var domDir = Path.Combine(targetDirectoryPath, "domains");
+            Directory.CreateDirectory(domDir);
+            File.WriteAllText(Path.Combine(domDir, $"domains{ext}"), provider.Serialize(val));
+        }
+        else if (string.Equals(key, "ports", StringComparison.OrdinalIgnoreCase) && val != null)
+        {
+            File.WriteAllText(Path.Combine(targetDirectoryPath, $"ports{ext}"), provider.Serialize(val));
+        }
+        else if (string.Equals(key, "volumes", StringComparison.OrdinalIgnoreCase) && val != null)
+        {
+            File.WriteAllText(Path.Combine(targetDirectoryPath, $"volumes{ext}"), provider.Serialize(val));
+        }
+        else if (string.Equals(key, "files", StringComparison.OrdinalIgnoreCase) && val is JsonObject filesObj)
+        {
+            WriteRawFilesSubtree(Path.Combine(targetDirectoryPath, "files"), filesObj);
+        }
+        else if (val != null)
+        {
+            rootCopy[key] = JsonNode.Parse(val.ToJsonString());
+        }
+    }
+
+    private static void WriteDirectorySubtree(string dir, JsonObject obj, string ext, IConfigFormatProvider provider)
+    {
+        Directory.CreateDirectory(dir);
+        foreach (var (name, nodeVal) in obj)
+        {
+            if (nodeVal != null)
+            {
+                File.WriteAllText(Path.Combine(dir, $"{name}{ext}"), provider.Serialize(nodeVal));
+            }
+        }
+    }
+
+    private static void WriteRawFilesSubtree(string filesDir, JsonObject filesObj)
+    {
+        Directory.CreateDirectory(filesDir);
+        foreach (var (name, contentVal) in filesObj)
+        {
+            if (contentVal is JsonValue jv)
+            {
+                var filePath = Path.Combine(filesDir, name);
+                var pDir = Path.GetDirectoryName(filePath);
+                if (!string.IsNullOrEmpty(pDir))
+                {
+                    Directory.CreateDirectory(pDir);
+                }
+                File.WriteAllText(filePath, jv.ToString());
+            }
+        }
     }
 
     public string Format(string content, string format)
@@ -264,8 +414,7 @@ public sealed class VirtualConfigEngine
                             ["ssh_key"] = new JsonObject { ["type"] = "string" },
                             ["vpn_ip"] = new JsonObject { ["type"] = "string" },
                             ["is_public"] = new JsonObject { ["type"] = "boolean", ["default"] = false }
-                        },
-                        ["required"] = new JsonArray(JsonValue.Create("host"))
+                        }
                     }
                 },
                 ["services"] = new JsonObject

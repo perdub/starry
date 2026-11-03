@@ -193,6 +193,7 @@ internal static class Program
 
             await adoptionService.AdoptHostAsync(conn, adoptionOptions).ConfigureAwait(false);
             AnsiConsole.MarkupLine($"[bold green]✓ Successfully adopted host! Configuration generated in '{Markup.Escape(outDir)}'.[/]");
+            await CheckAndTriggerGitSyncAsync(outDir, args).ConfigureAwait(false);
             return 0;
         }
         catch (Exception ex)
@@ -493,6 +494,7 @@ internal static class Program
             engine.Pack(tree, outputFile, format);
             var msg = localizer.FormatString(LocalizationKeys.ConfigPackSuccess, outputFile);
             AnsiConsole.MarkupLine($"[green]✓ {Markup.Escape(msg)}[/]");
+            _ = CheckAndTriggerGitSyncAsync(sourceDir, args, tree);
             return 0;
         }
         catch (Exception ex)
@@ -515,6 +517,7 @@ internal static class Program
             engine.Split(tree, targetDir, format);
             var msg = localizer.FormatString(LocalizationKeys.ConfigSplitSuccess, targetDir);
             AnsiConsole.MarkupLine($"[green]✓ {Markup.Escape(msg)}[/]");
+            _ = CheckAndTriggerGitSyncAsync(targetDir, args, tree);
             return 0;
         }
         catch (Exception ex)
@@ -603,6 +606,7 @@ internal static class Program
             var encryptedCount = manager.EncryptOpenSecrets(tree, key, targetPath, engine);
 
             AnsiConsole.MarkupLine($"[green]✓ Successfully encrypted {encryptedCount} open secret(s) with AES-256-GCM + AAD.[/]");
+            _ = CheckAndTriggerGitSyncAsync(targetPath, args, tree);
             return 0;
         }
         catch (Exception ex)
@@ -645,6 +649,10 @@ internal static class Program
             if (gitCommit)
             {
                 await RunGitCommitAndPushAsync(gitPush).ConfigureAwait(false);
+            }
+            else
+            {
+                await CheckAndTriggerGitSyncAsync(targetPath, args, tree).ConfigureAwait(false);
             }
 
             return 0;
@@ -1023,6 +1031,7 @@ internal static class Program
 
             engine.Split(tree, configPath, "yaml");
             AnsiConsole.MarkupLine($"[bold green]✓ Node '{Markup.Escape(nodeName)}' successfully added to configuration and bootstrapped![/]");
+            await CheckAndTriggerGitSyncAsync(configPath, args, tree).ConfigureAwait(false);
             return 0;
         }
         catch (Exception ex)
@@ -1127,6 +1136,7 @@ internal static class Program
             }
 
             AnsiConsole.MarkupLine($"[bold green]✓ Successfully rotated SSH keys for {targets.Count} node(s) and updated configuration![/]");
+            await CheckAndTriggerGitSyncAsync(configPath, args, tree).ConfigureAwait(false);
             return 0;
         }
         catch (Exception ex)
@@ -1416,5 +1426,22 @@ internal static class Program
         var errorMsg = localizer.FormatString(LocalizationKeys.ErrorUnknownCommand, command);
         AnsiConsole.MarkupLine($"[red]{Markup.Escape(errorMsg)}[/]");
         return Task.FromResult(1);
+    }
+
+    private static async Task CheckAndTriggerGitSyncAsync(string workingDir, string[] args, ConfigTree? tree = null)
+    {
+        var hasFlag = args.Any(a => string.Equals(a, "--git-sync", StringComparison.OrdinalIgnoreCase));
+        var hasConfigAutoSync = tree?.Root["git"]?["auto_sync"]?.GetValue<bool>() == true;
+
+        if (hasFlag || hasConfigAutoSync)
+        {
+            var syncService = new GitSyncService();
+            AnsiConsole.MarkupLine("[grey]Triggering automated Git upstream sync...[/]");
+            var ok = await syncService.SyncUpstreamAsync(workingDir).ConfigureAwait(false);
+            if (ok)
+            {
+                AnsiConsole.MarkupLine("[green]✓ Git repository automatically synced upstream.[/]");
+            }
+        }
     }
 }

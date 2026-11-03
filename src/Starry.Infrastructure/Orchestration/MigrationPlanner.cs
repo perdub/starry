@@ -22,6 +22,7 @@ public static class MigrationPlanner
         var nodeCount = PlanNodeActions(desiredConfig, actions);
         PlanNetworkActions(nodeCount, actions);
         PlanServiceActions(desiredConfig, currentServiceNodePlacements, actions, onlyChangedServices);
+        PlanDnsActions(desiredConfig, actions);
 
         var sortedActions = actions
             .OrderBy(a => a.Priority)
@@ -137,6 +138,28 @@ public static class MigrationPlanner
                     Priority: 50 + priority,
                     Dependencies: ["network:wireguard:mesh", "network:nftables:ruleset"]));
             }
+        }
+    }
+
+    private static void PlanDnsActions(ConfigTree desiredConfig, List<PlanAction> actions)
+    {
+        if (desiredConfig.Root.TryGetPropertyValue("domains", out var domNode) && domNode is JsonObject)
+        {
+            actions.Add(new PlanAction(
+                Id: "dns:domains:sync",
+                ActionType: PlanActionType.UpdateDns,
+                Target: "domains",
+                Description: "Synchronize hierarchical domains, certificates, and Cloudflare origin rules",
+                Priority: 95));
+        }
+        else if (desiredConfig.Root.TryGetPropertyValue("dns", out var dnsNode) && dnsNode is JsonObject)
+        {
+            actions.Add(new PlanAction(
+                Id: "dns:cluster:sync",
+                ActionType: PlanActionType.UpdateDns,
+                Target: "dns",
+                Description: "Synchronize DNS records with configured DNS provider",
+                Priority: 95));
         }
     }
 }

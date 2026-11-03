@@ -197,7 +197,11 @@ module ConfigAst =
             | ObjectNode (m, _) ->
                 match m.TryFind(head) with
                 | Some child -> getAtPath tail child
-                | None -> None
+                | None ->
+                    let joined = String.concat "." pathSegments
+                    match m.TryFind(joined) with
+                    | Some child -> Some child
+                    | None -> None
             | _ -> None
 
     // Unified Directory-to-Graph AST Loader
@@ -248,10 +252,26 @@ module ConfigAst =
                 | _ -> ()
             else
                 let segments =
-                    let pathWithoutExt =
-                        if String.IsNullOrEmpty(dirName) then fileNameNoExt
-                        else Path.Combine(dirName, fileNameNoExt).Replace('\\', '/')
-                    pathWithoutExt.Split('/', StringSplitOptions.RemoveEmptyEntries)
+                    let isUnstructured =
+                        match parsed with
+                        | StringNode _ -> true
+                        | _ -> false
+
+                    let isUnderFiles =
+                        if String.IsNullOrEmpty(dirName) then false
+                        else dirName.Equals("files", StringComparison.OrdinalIgnoreCase) ||
+                             dirName.StartsWith("files/", StringComparison.OrdinalIgnoreCase) ||
+                             dirName.StartsWith("files\\", StringComparison.OrdinalIgnoreCase)
+
+                    let pathSegmentStr =
+                        if isUnderFiles || isUnstructured then
+                            if String.IsNullOrEmpty(dirName) then fileName
+                            else Path.Combine(dirName, fileName).Replace('\\', '/')
+                        else
+                            if String.IsNullOrEmpty(dirName) then fileNameNoExt
+                            else Path.Combine(dirName, fileNameNoExt).Replace('\\', '/')
+
+                    pathSegmentStr.Split('/', StringSplitOptions.RemoveEmptyEntries)
                     |> Array.toList
 
                 rootNode <- setAtPath segments parsed rootNode
