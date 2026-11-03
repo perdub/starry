@@ -3,8 +3,8 @@
 ## Overview
 
 - **Total Files**: 160
-- **Total Lines of Code**: 22150
-- **Total Size**: 840.3 KB
+- **Total Lines of Code**: 22155
+- **Total Size**: 840.5 KB
 - **Root Directory**: `/root/src/starry`
 
 ## Repository Structure
@@ -11964,7 +11964,7 @@ public sealed record ValidationIssue(
 
 ## File: src/Starry.Infrastructure/Configuration/VirtualConfigEngine.cs
 
-**Lines**: 467 | **Size**: 17.3 KB | **Language**: csharp
+**Lines**: 472 | **Size**: 17.5 KB | **Language**: csharp
 
 ```csharp
 using System.Text.Json;
@@ -12297,9 +12297,7 @@ public sealed class VirtualConfigEngine
         }
         else if (string.Equals(key, "domains", StringComparison.OrdinalIgnoreCase) && val != null)
         {
-            var domDir = Path.Combine(targetDirectoryPath, "domains");
-            Directory.CreateDirectory(domDir);
-            File.WriteAllText(Path.Combine(domDir, $"domains{ext}"), provider.Serialize(val));
+            WriteDomainsSubtree(targetDirectoryPath, val, ext, provider);
         }
         else if (string.Equals(key, "ports", StringComparison.OrdinalIgnoreCase) && val != null)
         {
@@ -12317,6 +12315,13 @@ public sealed class VirtualConfigEngine
         {
             rootCopy[key] = JsonNode.Parse(val.ToJsonString());
         }
+    }
+
+    private static void WriteDomainsSubtree(string targetDirectoryPath, JsonNode val, string ext, IConfigFormatProvider provider)
+    {
+        var domDir = Path.Combine(targetDirectoryPath, "domains");
+        Directory.CreateDirectory(domDir);
+        File.WriteAllText(Path.Combine(domDir, $"domains{ext}"), provider.Serialize(val));
     }
 
     private static void WriteDirectorySubtree(string dir, JsonObject obj, string ext, IConfigFormatProvider provider)
