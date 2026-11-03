@@ -696,12 +696,9 @@ public sealed partial class ClusterOrchestrator
 
         if (serviceObj["volumes"] is JsonArray arr)
         {
-            foreach (var item in arr)
+            foreach (var item in arr.Where(i => i != null && !string.IsNullOrWhiteSpace(i.ToString())))
             {
-                if (item != null && !string.IsNullOrWhiteSpace(item.ToString()))
-                {
-                    result.Add(item.ToString().Trim());
-                }
+                result.Add(item!.ToString().Trim());
             }
             return result;
         }
@@ -1447,12 +1444,26 @@ public sealed partial class ClusterOrchestrator
             targetVip = targetSvc["vip"]?.ToString() ?? targetHost;
         }
 
+        string family;
+        if (fromStr.Contains("ipv6", StringComparison.OrdinalIgnoreCase))
+        {
+            family = "ipv6";
+        }
+        else if (fromStr.Contains("ipv4", StringComparison.OrdinalIgnoreCase))
+        {
+            family = "ipv4";
+        }
+        else
+        {
+            family = "any";
+        }
+
         return new PortForwardRule(
             HostPort: hostPort,
             Protocol: proto,
             TargetVip: targetVip,
             TargetPort: targetPort,
-            AddressFamily: fromStr.Contains("ipv6", StringComparison.OrdinalIgnoreCase) ? "ipv6" : (fromStr.Contains("ipv4", StringComparison.OrdinalIgnoreCase) ? "ipv4" : "any"));
+            AddressFamily: family);
     }
 
     private static void ParseServicePortForwards(

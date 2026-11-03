@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.Text.Json.Nodes;
 using Starry.Core.Configuration;
 using Starry.Core.Dns;
@@ -87,7 +88,7 @@ public static class DomainRoutingService
 
     private static string BuildHostname(List<string> segments)
     {
-        var filtered = segments.Where(s => s != "@").Reverse().ToList();
+        var filtered = segments.Where(s => !string.Equals(s, "@", StringComparison.Ordinal)).Reverse().ToList();
         return string.Join(".", filtered);
     }
 
@@ -165,67 +166,88 @@ public static class DomainRoutingService
 
         foreach (var r in routes)
         {
-            if (!string.IsNullOrEmpty(r.SniTarget))
+            AddNginxRoute(nginxRoutes, r);
+            await SyncRouteDnsAsync(r, nodes, dnsProvider, logger, ct).ConfigureAwait(false);
+        }
+
+        await DeployNginxIngressAsync(nginxRoutes, nodes, logger, ct).ConfigureAwait(false);
+    }
+
+    private static void AddNginxRoute(List<Generators.NginxRoute> nginxRoutes, ResolvedDomainRoute r)
+    {
+        if (!string.IsNullOrEmpty(r.SniTarget))
+        {
+            nginxRoutes.Add(Generators.NginxRoute.NewSniPassthrough(r.FullHostname, r.SniTarget, r.ProxyProtocol));
+        }
+        else if (!string.IsNullOrEmpty(r.HttpTarget))
+        {
+            var parts = r.HttpTarget.Split(':');
+            var host = parts[0];
+            var port = parts.Length > 1 && int.TryParse(parts[1], CultureInfo.InvariantCulture, out var p) ? p : 80;
+
+            nginxRoutes.Add(Generators.NginxRoute.NewHttpReverseProxy(
+                r.FullHostname,
+                host,
+                port,
+                Microsoft.FSharp.Core.FSharpOption<string>.None,
+                Microsoft.FSharp.Core.FSharpOption<string>.None));
+        }
+    }
+
+    private static async Task SyncRouteDnsAsync(
+        ResolvedDomainRoute r,
+        IReadOnlyList<INodeConnection> nodes,
+        IDnsProvider? dnsProvider,
+        Action<string>? logger,
+        CancellationToken ct)
+    {
+        if (dnsProvider == null)
+        {
+            return;
+        }
+
+        var targetIp = "127.0.0.1";
+        if (!string.IsNullOrEmpty(r.TargetNode))
+        {
+            var cleanNode = r.TargetNode.StartsWith("$nodes.", StringComparison.OrdinalIgnoreCase)
+                ? r.TargetNode.Substring("$nodes.".Length)
+                : r.TargetNode;
+
+            var nodeConn = nodes.FirstOrDefault(n => string.Equals(n.NodeName, cleanNode, StringComparison.OrdinalIgnoreCase));
+            if (nodeConn != null)
             {
-                nginxRoutes.Add(Generators.NginxRoute.NewSniPassthrough(r.FullHostname, r.SniTarget, r.ProxyProtocol));
-            }
-            else if (!string.IsNullOrEmpty(r.HttpTarget))
-            {
-                var parts = r.HttpTarget.Split(':');
-                var host = parts[0];
-                var port = parts.Length > 1 && int.TryParse(parts[1], CultureInfo.InvariantCulture, out var p) ? p : 80;
-
-                nginxRoutes.Add(Generators.NginxRoute.NewHttpReverseProxy(
-                    r.FullHostname,
-                    host,
-                    port,
-                    Microsoft.FSharp.Core.FSharpOption<string>.None,
-                    Microsoft.FSharp.Core.FSharpOption<string>.None));
-            }
-
-            if (dnsProvider != null)
-            {
-                var targetIp = "127.0.0.1";
-                if (!string.IsNullOrEmpty(r.TargetNode))
-                {
-                    var cleanNode = r.TargetNode.StartsWith("$nodes.", StringComparison.OrdinalIgnoreCase)
-                        ? r.TargetNode.Substring("$nodes.".Length)
-                        : r.TargetNode;
-
-                    var nodeConn = nodes.FirstOrDefault(n => string.Equals(n.NodeName, cleanNode, StringComparison.OrdinalIgnoreCase));
-                    if (nodeConn != null)
-                    {
-                        targetIp = nodeConn.Host;
-                    }
-                }
-
-                logger?.Invoke($"Registering DNS record for '{r.FullHostname}' in zone '{r.ZoneDomain}' -> {targetIp}...");
-                var record = new DnsRecord(Guid.NewGuid().ToString("N"), "A", r.FullHostname, targetIp, 120, Proxied: true);
-                await dnsProvider.UpsertRecordAsync(r.ZoneDomain, record, ct).ConfigureAwait(false);
-
-                if (dnsProvider is CloudflareDnsProvider cf && r.EntryPort != 443)
-                {
-                    logger?.Invoke($"Configuring Cloudflare Origin Rule for '{r.FullHostname}' rewriting origin port to {r.EntryPort}...");
-                    await cf.ConfigureOriginRuleAsync(r.ZoneDomain, r.FullHostname, r.EntryPort, ct).ConfigureAwait(false);
-                }
+                targetIp = nodeConn.Host;
             }
         }
 
-        // If ingress routes were compiled, generate Nginx config
-        if (nginxRoutes.Count > 0)
+        logger?.Invoke($"Registering DNS record for '{r.FullHostname}' in zone '{r.ZoneDomain}' -> {targetIp}...");
+        var record = new DnsRecord(Guid.NewGuid().ToString("N"), "A", r.FullHostname, targetIp, 120, Proxied: true);
+        await dnsProvider.UpsertRecordAsync(r.ZoneDomain, record, ct).ConfigureAwait(false);
+
+        if (dnsProvider is CloudflareDnsProvider cf && r.EntryPort != 443)
+        {
+            logger?.Invoke($"Configuring Cloudflare Origin Rule for '{r.FullHostname}' rewriting origin port to {r.EntryPort}...");
+            await cf.ConfigureOriginRuleAsync(r.ZoneDomain, r.FullHostname, r.EntryPort, ct).ConfigureAwait(false);
+        }
+    }
+
+    private static async Task DeployNginxIngressAsync(
+        List<Generators.NginxRoute> nginxRoutes,
+        IReadOnlyList<INodeConnection> nodes,
+        Action<string>? logger,
+        CancellationToken ct)
+    {
+        if (nginxRoutes.Count > 0 && nodes.Count > 0)
         {
             var nginxConf = Generators.generateNginxConfig(1, Microsoft.FSharp.Collections.ListModule.OfSeq(nginxRoutes));
             logger?.Invoke($"Compiled Nginx Ingress proxy config for {nginxRoutes.Count} route(s).");
-            if (nodes.Count > 0)
+            var targetNode = nodes[0];
+            await targetNode.ExecuteCommandAsync(new ProcessSpec
             {
-                var targetNode = nodes[0];
-                await targetNode.ExecuteCommandAsync(new ProcessSpec
-                {
-                    Executable = "sh",
-                    Arguments = ["-c", "mkdir -p /etc/nginx && cat > /etc/nginx/nginx.conf && (nginx -s reload 2>/dev/null || true)"],
-                    StandardInputBytes = System.Text.Encoding.UTF8.GetBytes(nginxConf)
-                }, ct).ConfigureAwait(false);
-            }
+                Executable = "sh",
+                Arguments = ["-c", "mkdir -p /etc/nginx && cat > /etc/nginx/nginx.conf && (nginx -s reload 2>/dev/null || true)"],
+                StandardInputBytes = Encoding.UTF8.GetBytes(nginxConf)
+            }, ct).ConfigureAwait(false);
         }
     }
 }
