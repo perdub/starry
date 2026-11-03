@@ -2,9 +2,9 @@
 
 ## Overview
 
-- **Total Files**: 160
-- **Total Lines of Code**: 22234
-- **Total Size**: 842.4 KB
+- **Total Files**: 172
+- **Total Lines of Code**: 24547
+- **Total Size**: 933.3 KB
 - **Root Directory**: `/root/src/starry`
 
 ## Repository Structure
@@ -67,6 +67,7 @@ starry/
 │   └── package.json
 ├── src/
 │   ├── Starry.Cli/
+│   │   ├── CliHelpRenderer.cs
 │   │   ├── Program.cs
 │   │   └── Starry.Cli.csproj
 │   ├── Starry.Core/
@@ -117,7 +118,10 @@ starry/
 │       ├── Backups/
 │       │   ├── BundleManifest.cs
 │       │   ├── FleetBundleService.cs
-│       │   └── RcloneBackupStorageProvider.cs
+│       │   ├── RcloneBackupStorageProvider.cs
+│       │   ├── S3BackupStorageProvider.cs
+│       │   └── S3StorageOptions.cs
+│       ├── Cli/
 │       ├── Configuration/
 │       │   ├── ConfigValidationResult.cs
 │       │   ├── ConfigValidator.cs
@@ -133,12 +137,18 @@ starry/
 │       │   ├── ContainerPriorityScheduler.cs
 │       │   ├── DockerRuntime.cs
 │       │   └── PodmanRuntime.cs
+│       ├── Diagnostics/
+│       │   ├── HostPreflightInspector.cs
+│       │   └── PreflightCheckResult.cs
 │       ├── Dns/
 │       │   ├── CloudflareDnsProvider.cs
 │       │   └── WebhookDnsProvider.cs
 │       ├── Localization/
 │       │   └── Localizer.cs
 │       ├── Network/
+│       │   ├── AllocatedPortInfo.cs
+│       │   ├── DomainEndpointAllocator.cs
+│       │   ├── DualStackPortRelay.cs
 │       │   ├── IdLedgerService.cs
 │       │   ├── IdLedgerState.cs
 │       │   ├── InterfaceClassification.cs
@@ -175,6 +185,9 @@ starry/
 │       │   └── ProcessRunner.cs
 │       ├── Security/
 │       │   ├── CryptoService.cs
+│       │   ├── MasterKeyResolver.cs
+│       │   ├── PortRandomizerService.cs
+│       │   ├── SecretItemInfo.cs
 │       │   └── SecretManager.cs
 │       └── Starry.Infrastructure.csproj
 ├── tests/
@@ -208,6 +221,7 @@ starry/
 │       ├── SshNodeConnectionTests.cs
 │       ├── Starry.UnitTests.csproj
 │       ├── StarryDslTests.cs
+│       ├── V34FeaturesTests.cs
 │       ├── VirtualConfigEngineTests.cs
 │       └── WireGuardMeshTests.cs
 ├── .editorconfig
@@ -573,7 +587,7 @@ Code
 
 ## File: README.md
 
-**Lines**: 163 | **Size**: 7.5 KB | **Language**: markdown
+**Lines**: 173 | **Size**: 8.9 KB | **Language**: markdown
 
 ````markdown
 # 🌟 STARRY
@@ -601,12 +615,14 @@ Code
 **`starry`** is an autonomous, single-binary GitOps orchestrator designed to run across heterogeneous cloud providers and low-cost virtual private servers (including NAT-isolated nodes and servers with small 10–20 GB SSDs).
 
 It manages the entire lifecycle of:
-* **Container Runtimes**: Direct Unix Domain Socket control of **Docker Engine** and **Podman** (Rootful & unprivileged Rootless) supporting full Docker Compose specifications (capabilities, sysctls, shm_size, memory limits, and networks).
+* **Container Runtimes**: Direct Unix Domain Socket control of **Docker Engine** and **Podman** (Rootful & unprivileged Rootless) supporting full Docker Compose specifications, automatic engine bootstrap on bare VPS, and Image Digest (`ImageId`) & `starry.spec.hash` drift reconciliation.
 * **Encrypted IPv6 Mesh Networking**: P2P **WireGuard** (`starry0`) running on the ULA prefix **`fd67:b00b::/32`**, assigning each host a `/48` subnet and each container replica a dedicated `/64` subnet with zero-downtime routing.
-* **Functional Configuration Engine (`Starry.Dsl`)**: Pure F# unified graph AST supporting whole-subtree substitution (`$`), object inheritance (`$:`), and automatic `files/*` text mounting.
-* **Host Firewalls & NAT**: Isolated table `inet starry` in **`nftables`** for atomic DNAT port forwarding, inter-container network ACL isolation, and symmetric outbound SNAT.
+* **Cross-Platform CLI (Windows, macOS, Linux)**: Full Windows workstation compatibility (`Win32-OpenSSH`) with automatic TCP loopback bridge (`127.0.0.1:<port>` -> `/var/run/docker.sock`), colon-safe control paths, and TOFU `known_hosts`.
+* **Functional Configuration Engine (`Starry.Dsl`)**: Pure F# unified graph AST supporting whole-subtree substitution (`$`), object inheritance (`$:`), and automatic `files/<service>/*` text mounting.
+* **Persistent Volumes & S3 Auto-Restore**: Multi-volume container support with a 3-step lifecycle: local preservation, automatic pull & restore from S3 on fresh nodes, and zero-disk-overhead streaming backups (`tar | zstd | S3`).
+* **Host Firewalls & NAT**: Isolated table `inet starry` in **`nftables`** for atomic DNAT port forwarding, inter-container network ACL isolation, symmetric outbound SNAT, and `DualStackPortRelay` for IPv4 -> IPv6 bridging.
 * **Scoped Internal DNS**: Embedded DNS server (`fd67:b00b:<host_id>::1`) with source-aware ACL isolation, round-robin replica load-balancing, and egress policy enforcement.
-* **Managed Ingress & L4 SNI Proxy**: Nginx with `stream { ssl_preread on; }` for Layer 4 TLS passthrough, Layer 7 SSL termination, and automated Cloudflare Origin Rules.
+* **Pre-Flight Doctor & Port Randomization**: Host diagnostics (`starry nodes doctor`) verifying strict UTC skew, sysctls, tun device, and port 53, plus lockout-safe SSH port migration (`starry nodes rotate-keys --randomize-ports`).
 * **Operating System Packages**: Unified abstraction across **Apt** (Debian/Ubuntu), **Dnf** (RHEL/AlmaLinux/Rocky/Fedora), **Apk** (Alpine), and **Pacman** (Arch Linux) with rolling security updates.
 * **Security & Secret Management**: In-repository encrypted secrets using **AES-256-GCM** bound to canonical JSON paths with **AAD (Additional Authenticated Data)** to block cut-and-paste tampering.
 * **Zero-Disk Streaming Backups**: Real-time volume backups via `tar | zstd | rclone rcat` without creating intermediate files on constrained VPS disks.
@@ -697,7 +713,15 @@ starry apply --config ./cluster
 | `starry encrypt [path]` | Encrypt all `PLAIN[...]` secrets in configuration into `ENC[...]`. |
 | `starry encrypt global --reencrypt` | Rotate master key, re-encrypt all secrets, and commit to Git. |
 | `starry nodes upgrade --rolling` | Execute zero-downtime rolling OS security updates across nodes. |
-| `starry nodes rotate-keys` | Generate fresh Ed25519 SSH keys and update remote `authorized_keys`. |
+| `starry secret update <path> [val]` | Atomically encrypt and update a secret value preserving graph references. |
+| `starry secret get <path>` | Decrypt and output plaintext secret value using resolved master key. |
+| `starry secret list` | Inspect all encrypted and plaintext secrets with their source files. |
+| `starry secret sync-github` | Push resolved master key to GitHub Actions Secrets. |
+| `starry nodes doctor [--fix]` | Run host preflight checks (UTC clock skew, sysctls, tun device, port 53). |
+| `starry nodes rotate-keys [--randomize-ports]` | Rotate Ed25519 SSH keys and safely migrate ports without lockout risk. |
+| `starry ports list` | List all named bidirectional port routing rules. |
+| `starry domains list` | List all hierarchical domain routes and SNI passthrough endpoints. |
+| `starry expose <svc> <port> [flags]` | Expose container service with optional random port / IP binding. |
 | `starry plan` | Generate and visualize DAG migration graph with colored icons. |
 | `starry apply` | Execute planned actions across the cluster fleet. |
 | `starry net interfaces [--verify]` | Inspect and verify network interfaces, IPv4/IPv6, and NAT status. |
@@ -5247,7 +5271,7 @@ Starry управляет не только контейнерами, но и б
 
 ## File: site/cli/commands.md
 
-**Lines**: 183 | **Size**: 6.5 KB | **Language**: markdown
+**Lines**: 232 | **Size**: 8.6 KB | **Language**: markdown
 
 ````markdown
 # Справочник команд CLI
@@ -5327,61 +5351,110 @@ starry nodes bootstrap root@203.0.113.10 \
 starry nodes list
 ```
 
-### `starry nodes upgrade`
+### `starry nodes doctor`
 
-Выполняет принудительную проверку и установку системных обновлений безопасности на указанной ноде с соблюдением политики `reboot_policy`.
+Выполняет комплексную проверку серверов перед развертыванием кластера:
+- Синхронизация времени по UTC (рассинхрон не более 30 сек во избежание сбоев рукопожатий WireGuard).
+- Флаги маршрутизации ядра (`net.ipv4.ip_forward`, `net.ipv6.conf.all.forwarding`, `proxy_ndp`).
+- Доступность интерфейса `/dev/net/tun` и файрвола `nftables`.
+- Конфликты за порт 53 с `systemd-resolved`.
+- Состояние SELinux, доступный объем диска и запас инодов.
 
 ```bash
-starry nodes upgrade <node-name> [--drain]
+# Диагностика:
+starry nodes doctor
+
+# Автоматическое исправление найденных конфликтов (включение sysctl, отключение systemd-resolved):
+starry nodes doctor --fix
+```
+
+### `starry nodes rotate-keys`
+
+Генерирует новые пары ключей Ed25519 (SSH) и WireGuard, разворачивает их на нодах с предварительной проверкой связности и удаляет устаревшие ключи.
+С флагом `--randomize-ports` производит безопасную миграцию SSH-порта на случайный диапазон `10000..60000` без риска потери доступа (lockout prevention).
+
+```bash
+starry nodes rotate-keys [--randomize-ports]
 ```
 
 ---
 
 ## 4. Управление секретами (`starry secret`)
 
-### `starry secret keygen`
+### `starry secret update` (алиас: `set`)
 
-Генерирует новый криптографически стойкий 256-битный мастер-ключ AES-256-GCM.
+Шифрует и атомарно записывает секрет по его каноническому пути, **сохраняя неизменными все `$`-ссылки** в конфигурации:
 
 ```bash
-starry secret keygen
+starry secret update services.db.env.POSTGRES_PASSWORD "SuperSecretPass123"
 ```
 
-### `starry secret encrypt`
+### `starry secret get`
 
-Шифрует открытую строку мастер-ключом из переменной `STARRY_MASTER_KEY`:
+Расшифровывает и выводит открытое значение секрета:
 
 ```bash
-starry secret encrypt "postgres-super-secure-password"
-# Вывод: ENC[AES256_GCM,data:...,iv:...,tag:...]
+starry secret get services.db.env.POSTGRES_PASSWORD
 ```
 
-### `starry secret decrypt`
+### `starry secret list`
 
-Расшифровывает маркер `ENC[...]` для проверки или отладки:
+Выводит таблицу всех зашифрованных (`ENC[...]`) и открытых (`PLAIN[...]`) секретов в репозитории с указанием исходных файлов.
 
 ```bash
-starry secret decrypt "ENC[AES256_GCM,data:...,iv:...,tag:...]"
+starry secret list
+```
+
+### `starry secret sync-github`
+
+Передает локально разрешенный мастер-ключ (`.starry/master.key` или `STARRY_MASTER_KEY`) в секреты GitHub Actions через утилиту `gh`.
+
+```bash
+starry secret sync-github [--name STARRY_MASTER_KEY]
 ```
 
 ---
 
-## 5. Ротация ключей безопасности
+## 5. Маршрутизация портов и публикация сервисов
 
-### `starry rotate-secrets`
+### `starry ports list`
 
-Дешифрует все токены `ENC[...]` в текущем файле конфигурации, генерирует новый мастер-ключ, перешифровывает все значения и обновляет секрет в GitHub Actions через API.
+Выводит список всех именованных правил двунаправленной маршрутизации портов:
 
 ```bash
-starry rotate-secrets [--github-repo user/repo]
+starry ports list
 ```
 
-### `starry rotate-keys`
+### `starry domains list`
 
-Генерирует новые пары ключей Ed25519 (SSH) и WireGuard, разворачивает их на нодах с предварительной проверкой связности и удаляет устаревшие ключи.
+Выводит иерархическое дерево маршрутов доменов, точек входа и Layer 4 SNI-прокси:
 
 ```bash
-starry rotate-keys [--dry-run]
+starry domains list
+```
+
+### `starry expose`
+
+Публикует порт сервиса во внешний мир с опциональной рандомизацией порта и привязкой IPv4/IPv6:
+
+```bash
+# Опубликовать веб-сервис на случайном порту:
+starry expose shop-web 3000 --family both --port random
+
+# Опубликовать на конкретном порту:
+starry expose shop-web 3000 --port 8080 --proto tcp
+```
+
+---
+
+## 6. Контекстная справка (`starry help`)
+
+Для любой команды и подкоманды Starry доступна интерактивная карточка помощи с синтаксисом, таблицей флагов и примерами:
+
+```bash
+starry help secret
+starry nodes --help
+starry expose -h
 ```
 
 ---
@@ -5749,7 +5822,7 @@ Starry maintains both application containers and host OS packages:
 
 ## File: site/en/cli/commands.md
 
-**Lines**: 211 | **Size**: 4.7 KB | **Language**: markdown
+**Lines**: 260 | **Size**: 6.0 KB | **Language**: markdown
 
 ````markdown
 # CLI Command Reference
@@ -5829,61 +5902,110 @@ Lists enrolled nodes, their internal WireGuard addresses, connection health, and
 starry nodes list
 ```
 
-### `starry nodes upgrade`
+### `starry nodes doctor`
 
-Triggers security update installation on a specified node following the defined `reboot_policy`.
+Executes preflight diagnostics across nodes:
+- UTC clock skew check (skew within 30s threshold to avoid WireGuard handshake drops).
+- Kernel IP forwarding sysctls (`net.ipv4.ip_forward`, `net.ipv6.conf.all.forwarding`, `proxy_ndp`).
+- Availability of `/dev/net/tun` and `nftables`.
+- Port 53 conflicts with `systemd-resolved`.
+- SELinux mode, root disk space, and free inode reserves.
 
 ```bash
-starry nodes upgrade <node-name> [--drain]
+# Diagnostic check:
+starry nodes doctor
+
+# Automatically fix issues (enabling sysctls, disabling systemd-resolved on port 53):
+starry nodes doctor --fix
+```
+
+### `starry nodes rotate-keys`
+
+Proactively rotates Ed25519 SSH keys and WireGuard keypairs across all nodes with rollback protection.
+With `--randomize-ports`, safely migrates SSH to a random port `10000..60000` with lockout prevention.
+
+```bash
+starry nodes rotate-keys [--randomize-ports]
 ```
 
 ---
 
 ## 4. Secret Operations (`starry secret`)
 
-### `starry secret keygen`
+### `starry secret update` (alias: `set`)
 
-Generates a cryptographically strong 256-bit AES-256-GCM master encryption key.
+Encrypts and atomically writes a secret at its canonical path, **preserving all `$` graph references** untouched:
 
 ```bash
-starry secret keygen
+starry secret update services.db.env.POSTGRES_PASSWORD "SuperSecretPass123"
 ```
 
-### `starry secret encrypt`
+### `starry secret get`
 
-Encrypts plain text strings using the key defined in `STARRY_MASTER_KEY`:
+Decrypts and displays the plaintext secret value:
 
 ```bash
-starry secret encrypt "postgres-super-secure-password"
-# Output: ENC[AES256_GCM,data:...,iv:...,tag:...]
+starry secret get services.db.env.POSTGRES_PASSWORD
 ```
 
-### `starry secret decrypt`
+### `starry secret list`
 
-Decrypts an `ENC[...]` token for local verification or debugging:
+Lists all encrypted (`ENC[...]`) and plaintext (`PLAIN[...]`) secret keys across the repository.
 
 ```bash
-starry secret decrypt "ENC[AES256_GCM,data:...,iv:...,tag:...]"
+starry secret list
+```
+
+### `starry secret sync-github`
+
+Uploads the resolved master key (`.starry/master.key` or `STARRY_MASTER_KEY`) to GitHub Actions Secrets via `gh secret set`.
+
+```bash
+starry secret sync-github [--name STARRY_MASTER_KEY]
 ```
 
 ---
 
-## 5. Security & Key Rotation
+## 5. Port Routing & Service Exposure
 
-### `starry rotate-secrets`
+### `starry ports list`
 
-Decrypts all `ENC[...]` values, generates a fresh master key, re-encrypts the manifest, and syncs repository secrets via the GitHub API.
+Lists all named bidirectional port routing rules:
 
 ```bash
-starry rotate-secrets [--github-repo user/repo]
+starry ports list
 ```
 
-### `starry rotate-keys`
+### `starry domains list`
 
-Proactively rotates Ed25519 SSH keys and WireGuard keypairs across all nodes with rollback protection.
+Inspects hierarchical domain routes, target endpoints, and SNI passthroughs:
 
 ```bash
-starry rotate-keys [--dry-run]
+starry domains list
+```
+
+### `starry expose`
+
+Exposes a service port with optional port randomization and IPv4/IPv6 family binding:
+
+```bash
+# Expose on a random port:
+starry expose shop-web 3000 --family both --port random
+
+# Expose on a specific port:
+starry expose shop-web 3000 --port 8080 --proto tcp
+```
+
+---
+
+## 6. Contextual Help (`starry help`)
+
+Every Starry command and subcommand provides an interactive help card with syntax, flags, and examples:
+
+```bash
+starry help secret
+starry nodes --help
+starry expose -h
 ```
 
 ---
@@ -7326,9 +7448,170 @@ starry encrypt global --reencrypt \
 </svg>
 ```
 
+## File: src/Starry.Cli/CliHelpRenderer.cs
+
+**Lines**: 154 | **Size**: 8.0 KB | **Language**: csharp
+
+```csharp
+using System.Globalization;
+using Spectre.Console;
+using Starry.Core.Localization;
+
+namespace Starry.Cli;
+
+/// <summary>
+/// Renders rich contextual CLI help cards (syntax, flags table, examples)
+/// for any starry command and subcommand.
+/// </summary>
+internal static class CliHelpRenderer
+{
+    public static void RenderCommandHelp(string[] args, ILocalizer localizer)
+    {
+        ArgumentNullException.ThrowIfNull(args);
+        ArgumentNullException.ThrowIfNull(localizer);
+
+        var cleaned = args.Where(a => !string.Equals(a, "--help", StringComparison.OrdinalIgnoreCase) &&
+                                      !string.Equals(a, "-h", StringComparison.OrdinalIgnoreCase) &&
+                                      !string.Equals(a, "help", StringComparison.OrdinalIgnoreCase)).ToArray();
+
+        var cmd = cleaned.Length > 0 ? cleaned[0].ToLowerInvariant() : string.Empty;
+
+        switch (cmd)
+        {
+            case "secret":
+                RenderSecretHelp();
+                break;
+            case "nodes":
+                RenderNodesHelp();
+                break;
+            case "config":
+                RenderConfigHelp();
+                break;
+            case "ports":
+            case "domains":
+            case "expose":
+                RenderNetworkRoutingHelp();
+                break;
+            case "init":
+                RenderInitHelp();
+                break;
+            case "adopt":
+                RenderAdoptHelp();
+                break;
+            case "plan":
+            case "apply":
+                RenderPlanApplyHelp(cmd);
+                break;
+            default:
+                RenderGenericHelp(cmd);
+                break;
+        }
+    }
+
+    private static void RenderSecretHelp()
+    {
+        AnsiConsole.MarkupLine("[bold yellow]STARRY SECRET MANAGEMENT[/]");
+        AnsiConsole.MarkupLine("[grey]Unified AES-256-GCM + AAD secret handling and GitHub sync.[/]\n");
+
+        var table = new Table().Border(TableBorder.Rounded).AddColumn("Subcommand").AddColumn("Usage").AddColumn("Description");
+        table.AddRow("update / set", "starry secret update <path> [val] [--config <dir>]", "Encrypt and atomically store secret (preserves graph references)");
+        table.AddRow("get", "starry secret get <canonical.path> [--config <dir>]", "Decrypt and display plaintext secret value");
+        table.AddRow("list", "starry secret list [--config <dir>]", "List all encrypted and plaintext secret keys in configuration");
+        table.AddRow("sync-github", "starry secret sync-github [--name <name>]", "Push resolved master key to GitHub Actions Secrets");
+        table.AddRow("keygen", "starry secret keygen", "Generate a fresh 32-byte Base64 master key");
+
+        AnsiConsole.Write(table);
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine("[bold]Examples:[/]");
+        AnsiConsole.MarkupLine("  [cyan]starry secret update services.db.env.POSTGRES_PASSWORD mypassword[/]");
+        AnsiConsole.MarkupLine("  [cyan]starry secret get services.db.env.POSTGRES_PASSWORD[/]");
+        AnsiConsole.MarkupLine("  [cyan]starry secret list[/]");
+    }
+
+    private static void RenderNodesHelp()
+    {
+        AnsiConsole.MarkupLine("[bold yellow]STARRY NODES MANAGEMENT[/]");
+        AnsiConsole.MarkupLine("[grey]Manage VPS fleet nodes, bootstrapping, rolling upgrades, and preflight checks.[/]\n");
+
+        var table = new Table().Border(TableBorder.Rounded).AddColumn("Subcommand").AddColumn("Usage").AddColumn("Description");
+        table.AddRow("list", "starry nodes list [--config <dir>]", "List all configured cluster nodes");
+        table.AddRow("bootstrap", "starry nodes bootstrap <user@host:port> [--name <n>]", "Bootstrap packages, container engine, and WireGuard on a node");
+        table.AddRow("upgrade", "starry nodes upgrade [--rolling] [--full]", "Perform zero-downtime rolling OS security updates");
+        table.AddRow("rotate-keys", "starry nodes rotate-keys [--randomize-ports]", "Rotate Ed25519 SSH keys and safely migrate ports");
+        table.AddRow("doctor", "starry nodes doctor [node] [--fix]", "Run preflight health check (UTC clock skew, sysctls, tun, port 53)");
+
+        AnsiConsole.Write(table);
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine("[bold]Examples:[/]");
+        AnsiConsole.MarkupLine("  [cyan]starry nodes doctor --fix[/]");
+        AnsiConsole.MarkupLine("  [cyan]starry nodes rotate-keys --randomize-ports[/]");
+    }
+
+    private static void RenderConfigHelp()
+    {
+        AnsiConsole.MarkupLine("[bold yellow]STARRY CONFIGURATION TOOLBOX[/]");
+        AnsiConsole.MarkupLine("[grey]Validate, pack, split, and format virtual multi-file configuration trees.[/]\n");
+
+        var table = new Table().Border(TableBorder.Rounded).AddColumn("Subcommand").AddColumn("Usage").AddColumn("Description");
+        table.AddRow("validate", "starry config validate [dir]", "Validate schema, graph references, and secret envelopes");
+        table.AddRow("pack", "starry config pack <dir> -o <file>", "Pack directory tree into a single standalone YAML/JSON file");
+        table.AddRow("split", "starry config split <file> -o <dir>", "Split monolithic config into modular directory hierarchy");
+        table.AddRow("fmt", "starry config fmt <file>", "Format configuration file according to standard canonical style");
+        table.AddRow("schema", "starry config schema", "Print JSON Schema (draft 2020-12) for Starry configuration");
+
+        AnsiConsole.Write(table);
+    }
+
+    private static void RenderNetworkRoutingHelp()
+    {
+        AnsiConsole.MarkupLine("[bold yellow]STARRY NETWORK & PORT ROUTING[/]");
+        AnsiConsole.MarkupLine("[grey]Inspect and expose services across the IPv6 mesh and public gateways.[/]\n");
+
+        var table = new Table().Border(TableBorder.Rounded).AddColumn("Command").AddColumn("Usage").AddColumn("Description");
+        table.AddRow("ports list", "starry ports list [--config <dir>]", "List all named bidirectional port routing rules");
+        table.AddRow("domains list", "starry domains list [--config <dir>]", "List all hierarchical domain routes and SNI passthroughs");
+        table.AddRow("expose", "starry expose <service> <port> [flags]", "Expose container service with optional random port / IP");
+
+        AnsiConsole.Write(table);
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine("[bold]Flags for 'starry expose':[/]");
+        AnsiConsole.MarkupLine("  [green]--family <ipv4|ipv6|both>[/]  Address family to bind (default: both)");
+        AnsiConsole.MarkupLine("  [green]--port <random|number>[/]     Specific or random host port");
+        AnsiConsole.MarkupLine("  [green]--proto <tcp|udp>[/]          Transport protocol (default: tcp)");
+    }
+
+    private static void RenderInitHelp()
+    {
+        AnsiConsole.MarkupLine("[bold yellow]STARRY INIT[/]");
+        AnsiConsole.MarkupLine("[grey]Initialize a new Starry GitOps repository with standard directory layout.[/]\n");
+        AnsiConsole.MarkupLine("[bold]Usage:[/] [cyan]starry init [project-name] [--skip-folder-create][/]\n");
+        AnsiConsole.MarkupLine("[bold]Outputs:[/] Creates nodes/, services/, files/, domains/, starry.yaml, and .starry/master.key.");
+    }
+
+    private static void RenderAdoptHelp()
+    {
+        AnsiConsole.MarkupLine("[bold yellow]STARRY ADOPT[/]");
+        AnsiConsole.MarkupLine("[grey]Brownfield zero-downtime adoption of existing Docker/Podman servers.[/]\n");
+        AnsiConsole.MarkupLine("[bold]Usage:[/] [cyan]starry adopt <user@host[:port]> [--pull-files] [--out-dir ./config] [--format yaml][/]");
+    }
+
+    private static void RenderPlanApplyHelp(string cmd)
+    {
+        AnsiConsole.MarkupLine(CultureInfo.InvariantCulture, $"[bold yellow]STARRY {cmd.ToUpperInvariant()}[/]");
+        AnsiConsole.MarkupLine(CultureInfo.InvariantCulture, $"[bold]Usage:[/] [cyan]starry {cmd} [--config <dir>] [--only-changed][/]");
+    }
+
+    private static void RenderGenericHelp(string cmd)
+    {
+        AnsiConsole.MarkupLine($"[bold yellow]STARRY[/] - Command '[cyan]{Markup.Escape(cmd)}[/]'");
+        AnsiConsole.MarkupLine("Run [cyan]starry --help[/] to view the main command overview.");
+    }
+}
+```
+
 ## File: src/Starry.Cli/Program.cs
 
-**Lines**: 1447 | **Size**: 56.0 KB | **Language**: csharp
+**Lines**: 1754 | **Size**: 68.1 KB | **Language**: csharp
 
 ```csharp
 ﻿using System.Globalization;
@@ -7344,6 +7627,7 @@ using Starry.Core.Processes;
 using Starry.Infrastructure.Agent;
 using Starry.Infrastructure.Backups;
 using Starry.Infrastructure.Configuration;
+using Starry.Infrastructure.Diagnostics;
 using Starry.Infrastructure.Localization;
 using Starry.Infrastructure.Network;
 using Starry.Infrastructure.Nodes;
@@ -7362,10 +7646,34 @@ internal static class Program
         var lang = ExtractOptionValue(args, "--lang");
         ILocalizer localizer = new Localizer(lang);
 
-        if (args.Length == 0 || ContainsHelp(args))
+        if (args.Length == 0)
         {
             RenderHeader(localizer);
             RenderHelp(localizer);
+            return 0;
+        }
+
+        if (string.Equals(args[0], "help", StringComparison.OrdinalIgnoreCase))
+        {
+            if (args.Length == 1)
+            {
+                RenderHeader(localizer);
+                RenderHelp(localizer);
+                return 0;
+            }
+            CliHelpRenderer.RenderCommandHelp(args[1..], localizer);
+            return 0;
+        }
+
+        if (ContainsHelp(args))
+        {
+            if (args.Length == 1)
+            {
+                RenderHeader(localizer);
+                RenderHelp(localizer);
+                return 0;
+            }
+            CliHelpRenderer.RenderCommandHelp(args, localizer);
             return 0;
         }
 
@@ -7457,7 +7765,10 @@ internal static class Program
             "ADOPT" => HandleAdoptCommandAsync(commandArgs),
             "UNMANAGED" => HandleUnmanagedCommandAsync(commandArgs),
             "CONFIG" => HandleConfigCommand(commandArgs, localizer),
-            "SECRET" => Task.FromResult(HandleSecretCommand(commandArgs)),
+            "SECRET" => HandleSecretCommandAsync(commandArgs),
+            "PORTS" => Task.FromResult(HandlePortsCommand(commandArgs)),
+            "DOMAINS" => Task.FromResult(HandleDomainsCommand(commandArgs)),
+            "EXPOSE" => Task.FromResult(HandleExposeCommand(commandArgs)),
             "ENCRYPT" => HandleEncryptCommand(commandArgs),
             "NODES" => HandleNodesCommand(commandArgs, localizer),
             "ROTATE-KEYS" => HandleRotateKeysDirectCommand(commandArgs),
@@ -7587,63 +7898,160 @@ internal static class Program
         }
     }
 
-    private static int HandleSecretCommand(string[] args)
+    private static async Task<int> HandleSecretCommandAsync(string[] args)
     {
         var subCommand = args.Length > 0 ? args[0] : "help";
         var subArgs = args.Length > 1 ? args[1..] : Array.Empty<string>();
 
-        if (string.Equals(subCommand, "keygen", StringComparison.OrdinalIgnoreCase))
+        return subCommand.ToLowerInvariant() switch
         {
-            var key = CryptoService.GenerateMasterKeyBase64();
-            AnsiConsole.WriteLine(key);
-            return 0;
+            "keygen" => ExecuteSecretKeygen(),
+            "encrypt" => ExecuteSecretEncrypt(subArgs),
+            "decrypt" => ExecuteSecretDecrypt(subArgs),
+            "update" or "set" => await ExecuteSecretUpdateAsync(subArgs).ConfigureAwait(false),
+            "get" => ExecuteSecretGet(subArgs),
+            "list" => ExecuteSecretList(subArgs),
+            "sync-github" => await ExecuteSecretSyncGithubAsync(subArgs).ConfigureAwait(false),
+            _ => ShowSecretUsage()
+        };
+    }
+
+    private static int ExecuteSecretKeygen()
+    {
+        var key = CryptoService.GenerateMasterKeyBase64();
+        AnsiConsole.WriteLine(key);
+        return 0;
+    }
+
+    private static int ExecuteSecretEncrypt(string[] subArgs)
+    {
+        if (subArgs.Length == 0)
+        {
+            AnsiConsole.MarkupLine("[red]Usage: starry secret encrypt <value> --path <jsonPath> [--key <key>][/]");
+            return 1;
         }
 
-        if (string.Equals(subCommand, "encrypt", StringComparison.OrdinalIgnoreCase))
+        var plainText = subArgs[0];
+        var path = ExtractOptionValue(subArgs, "--path") ?? "secret";
+        var key = ResolveKeyFromArgsOrEnv(subArgs, "--key", "STARRY_MASTER_KEY")
+                  ?? throw new InvalidOperationException("Master key not provided. Set STARRY_MASTER_KEY or pass --key.");
+
+        var crypto = new CryptoService();
+        var envelope = crypto.Encrypt(Encoding.UTF8.GetBytes(plainText), key, path);
+        AnsiConsole.WriteLine(envelope.FormatEncrypted());
+        return 0;
+    }
+
+    private static int ExecuteSecretDecrypt(string[] subArgs)
+    {
+        if (subArgs.Length == 0)
         {
-            if (subArgs.Length == 0)
-            {
-                AnsiConsole.MarkupLine("[red]Usage: starry secret encrypt <value> --path <jsonPath> [--key <key>][/]");
-                return 1;
-            }
-
-            var plainText = subArgs[0];
-            var path = ExtractOptionValue(subArgs, "--path") ?? "secret";
-            var key = ResolveKeyFromArgsOrEnv(subArgs, "--key", "STARRY_MASTER_KEY")
-                      ?? throw new InvalidOperationException("Master key not provided. Set STARRY_MASTER_KEY or pass --key.");
-
-            var crypto = new CryptoService();
-            var envelope = crypto.Encrypt(Encoding.UTF8.GetBytes(plainText), key, path);
-            AnsiConsole.WriteLine(envelope.FormatEncrypted());
-            return 0;
+            AnsiConsole.MarkupLine("[red]Usage: starry secret decrypt <ENC[...]> --path <jsonPath> [--key <key>][/]");
+            return 1;
         }
 
-        if (string.Equals(subCommand, "decrypt", StringComparison.OrdinalIgnoreCase))
+        var encText = subArgs[0];
+        var path = ExtractOptionValue(subArgs, "--path") ?? "secret";
+        var key = ResolveKeyFromArgsOrEnv(subArgs, "--key", "STARRY_MASTER_KEY")
+                  ?? throw new InvalidOperationException("Master key not provided. Set STARRY_MASTER_KEY or pass --key.");
+
+        var crypto = new CryptoService();
+        if (!crypto.TryParseEncrypted(encText, out var envelope) || envelope == null)
         {
-            if (subArgs.Length == 0)
-            {
-                AnsiConsole.MarkupLine("[red]Usage: starry secret decrypt <ENC[...]> --path <jsonPath> [--key <key>][/]");
-                return 1;
-            }
-
-            var encText = subArgs[0];
-            var path = ExtractOptionValue(subArgs, "--path") ?? "secret";
-            var key = ResolveKeyFromArgsOrEnv(subArgs, "--key", "STARRY_MASTER_KEY")
-                      ?? throw new InvalidOperationException("Master key not provided. Set STARRY_MASTER_KEY or pass --key.");
-
-            var crypto = new CryptoService();
-            if (!crypto.TryParseEncrypted(encText, out var envelope) || envelope == null)
-            {
-                AnsiConsole.MarkupLine("[red]Invalid ENC[...] envelope format.[/]");
-                return 1;
-            }
-
-            var decrypted = crypto.Decrypt(envelope, key, path);
-            AnsiConsole.WriteLine(Encoding.UTF8.GetString(decrypted));
-            return 0;
+            AnsiConsole.MarkupLine("[red]Invalid ENC[...] envelope format.[/]");
+            return 1;
         }
 
-        AnsiConsole.MarkupLine("[yellow]Usage: starry secret (keygen|encrypt|decrypt)[/]");
+        var decrypted = crypto.Decrypt(envelope, key, path);
+        AnsiConsole.WriteLine(Encoding.UTF8.GetString(decrypted));
+        return 0;
+    }
+
+    private static async Task<int> ExecuteSecretUpdateAsync(string[] subArgs)
+    {
+        if (subArgs.Length == 0)
+        {
+            AnsiConsole.MarkupLine("[red]Usage: starry secret update <canonical.path> [plaintext_value] [--config <dir>][/]");
+            return 1;
+        }
+
+        var canonicalPath = subArgs[0];
+        var plainText = subArgs.Length > 1 && !subArgs[1].StartsWith('-')
+            ? subArgs[1]
+            : AnsiConsole.Prompt(new TextPrompt<string>("Enter secret:").Secret());
+
+        var configPath = ExtractOptionValue(subArgs, "--config") ?? ".";
+        var key = ResolveKeyFromArgsOrEnv(subArgs, "--key", "STARRY_MASTER_KEY")
+                  ?? MasterKeyResolver.ResolveKey(null, configPath)
+                  ?? throw new InvalidOperationException("Master key not found. Ensure .starry/master.key exists or set STARRY_MASTER_KEY.");
+
+        var engine = new VirtualConfigEngine();
+        var tree = engine.Load(configPath, resolveGraph: false);
+        var manager = new SecretManager();
+        manager.SetSecret(tree, canonicalPath, plainText, key, configPath, engine);
+
+        AnsiConsole.MarkupLine($"[green]✓ Successfully encrypted and updated secret '{Markup.Escape(canonicalPath)}'.[/]");
+        await CheckAndTriggerGitSyncAsync(configPath, subArgs, tree).ConfigureAwait(false);
+        return 0;
+    }
+
+    private static int ExecuteSecretGet(string[] subArgs)
+    {
+        if (subArgs.Length == 0)
+        {
+            AnsiConsole.MarkupLine("[red]Usage: starry secret get <canonical.path> [--config <dir>][/]");
+            return 1;
+        }
+
+        var canonicalPath = subArgs[0];
+        var configPath = ExtractOptionValue(subArgs, "--config") ?? ".";
+        var key = ResolveKeyFromArgsOrEnv(subArgs, "--key", "STARRY_MASTER_KEY")
+                  ?? MasterKeyResolver.ResolveKey(null, configPath)
+                  ?? throw new InvalidOperationException("Master key not found. Ensure .starry/master.key exists or set STARRY_MASTER_KEY.");
+
+        var engine = new VirtualConfigEngine();
+        var tree = engine.Load(configPath, resolveGraph: false);
+        var manager = new SecretManager();
+        var plainText = manager.GetSecret(tree, canonicalPath, key);
+
+        AnsiConsole.WriteLine(plainText);
+        return 0;
+    }
+
+    private static int ExecuteSecretList(string[] subArgs)
+    {
+        var configPath = ExtractOptionValue(subArgs, "--config") ?? ".";
+        var engine = new VirtualConfigEngine();
+        var tree = engine.Load(configPath, resolveGraph: false);
+        var manager = new SecretManager();
+        var secrets = manager.ListSecrets(tree);
+
+        var table = new Table().Border(TableBorder.Rounded).AddColumn("Path").AddColumn("Format").AddColumn("Source File");
+        foreach (var s in secrets)
+        {
+            var formatMarkup = s.IsEncrypted ? "[green]ENC[AES256_GCM][/]" : "[yellow]PLAIN[/]";
+            table.AddRow(s.Path, formatMarkup, s.SourceFile ?? "-");
+        }
+
+        AnsiConsole.Write(table);
+        return 0;
+    }
+
+    private static async Task<int> ExecuteSecretSyncGithubAsync(string[] subArgs)
+    {
+        var secretName = ExtractOptionValue(subArgs, "--name") ?? "STARRY_MASTER_KEY";
+        var configPath = ExtractOptionValue(subArgs, "--config") ?? ".";
+        var key = ResolveKeyFromArgsOrEnv(subArgs, "--key", "STARRY_MASTER_KEY")
+                  ?? MasterKeyResolver.ResolveKey(null, configPath)
+                  ?? throw new InvalidOperationException("Master key not found. Set STARRY_MASTER_KEY or run in initialized repository.");
+
+        await UpdateGitHubSecretAsync(secretName, Convert.ToBase64String(key)).ConfigureAwait(false);
+        return 0;
+    }
+
+    private static int ShowSecretUsage()
+    {
+        AnsiConsole.MarkupLine("[yellow]Usage: starry secret (update|get|list|sync-github|keygen|encrypt|decrypt)[/]");
         return 0;
     }
 
@@ -7725,7 +8133,24 @@ internal static class Program
                 }
             }
 
-            return new AgentOptions { InternalDnsRecords = internalRecords };
+            var backupPolicies = new List<BackupPolicy>();
+            if (tree.Root["volumes"] is JsonObject volumesObj)
+            {
+                foreach (var (volName, volVal) in volumesObj)
+                {
+                    var path = volVal?["path"]?.ToString() ?? $"/var/lib/docker/volumes/{volName}/_data";
+                    backupPolicies.Add(new BackupPolicy(
+                        ServiceName: volName,
+                        VolumePath: path,
+                        Interval: TimeSpan.FromHours(24)));
+                }
+            }
+
+            return new AgentOptions
+            {
+                InternalDnsRecords = internalRecords,
+                BackupPolicies = backupPolicies
+            };
         }
         catch (Exception)
         {
@@ -7934,7 +8359,7 @@ internal static class Program
         try
         {
             var engine = new VirtualConfigEngine();
-            var tree = engine.Load(targetPath);
+            var tree = engine.Load(targetPath, resolveGraph: false);
             var manager = new SecretManager();
             var encryptedCount = manager.EncryptOpenSecrets(tree, key, targetPath, engine);
 
@@ -7968,7 +8393,7 @@ internal static class Program
         try
         {
             var engine = new VirtualConfigEngine();
-            var tree = engine.Load(targetPath);
+            var tree = engine.Load(targetPath, resolveGraph: false);
             var manager = new SecretManager();
             var count = manager.ReencryptAll(tree, oldKey, newKey, targetPath, engine);
 
@@ -8179,6 +8604,11 @@ internal static class Program
         if (string.Equals(subCommand, "interfaces", StringComparison.OrdinalIgnoreCase))
         {
             return await ExecuteNetInterfacesAsync(subArgs).ConfigureAwait(false);
+        }
+
+        if (string.Equals(subCommand, "doctor", StringComparison.OrdinalIgnoreCase))
+        {
+            return await ExecuteNodesDoctorAsync(subArgs).ConfigureAwait(false);
         }
 
         AnsiConsole.MarkupLine($"[yellow]starry nodes[/] - [grey]{Markup.Escape(localizer.GetString(LocalizationKeys.NodesCommandDescription))}[/]");
@@ -8452,6 +8882,7 @@ internal static class Program
                 AnsiConsole.MarkupLine($"[yellow]No master key specified. Generated STARRY_MASTER_KEY for rotated keys:[/] [bold green]{newKeyStr}[/]");
             }
 
+            var randomizePorts = args.Any(a => string.Equals(a, "--randomize-ports", StringComparison.OrdinalIgnoreCase));
             var secretManager = new SecretManager();
 
             foreach (var target in targets)
@@ -8461,11 +8892,7 @@ internal static class Program
                     continue;
                 }
 
-                await using var conn = await orchestrator.ResolveNodeConnectionAsync(target, nodeObj).ConfigureAwait(false);
-                var newPrivateKey = await NodeOperationsService.RotateSshKeysAsync(conn, oldPubKey, msg => AnsiConsole.MarkupLine($"[grey]  > {Markup.Escape(msg)}[/]")).ConfigureAwait(false);
-
-                nodeObj["ssh_key"] = $"PLAIN[{newPrivateKey}]";
-                secretManager.EncryptOpenSecrets(tree, masterKey, configPath, engine);
+                await RotateSingleNodeKeyAsync(target, nodeObj, oldPubKey, randomizePorts, masterKey, configPath, tree, orchestrator, secretManager).ConfigureAwait(false);
             }
 
             AnsiConsole.MarkupLine($"[bold green]✓ Successfully rotated SSH keys for {targets.Count} node(s) and updated configuration![/]");
@@ -8477,6 +8904,169 @@ internal static class Program
             AnsiConsole.MarkupLine($"[red]SSH key rotation failed: {Markup.Escape(ex.Message)}[/]");
             return 1;
         }
+    }
+
+    private static async Task RotateSingleNodeKeyAsync(
+        string target,
+        JsonObject nodeObj,
+        string oldPubKey,
+        bool randomizePorts,
+        byte[] masterKey,
+        string configPath,
+        ConfigTree tree,
+        ClusterOrchestrator orchestrator,
+        SecretManager secretManager)
+    {
+        await using var conn = await orchestrator.ResolveNodeConnectionAsync(target, nodeObj).ConfigureAwait(false);
+        var newPrivateKey = await NodeOperationsService.RotateSshKeysAsync(conn, oldPubKey, msg => AnsiConsole.MarkupLine($"[grey]  > {Markup.Escape(msg)}[/]")).ConfigureAwait(false);
+
+        nodeObj["ssh_key"] = $"PLAIN[{newPrivateKey}]";
+
+        if (randomizePorts)
+        {
+            var curPort = conn.Port > 0 ? conn.Port : 22;
+            var newPort = await PortRandomizerService.MigrateSshPortSafelyAsync(conn, curPort, null, msg => AnsiConsole.MarkupLine($"[grey]  > {Markup.Escape(msg)}[/]")).ConfigureAwait(false);
+            nodeObj["port"] = newPort;
+        }
+
+        secretManager.EncryptOpenSecrets(tree, masterKey, configPath, new VirtualConfigEngine());
+    }
+
+    private static async Task<int> ExecuteNodesDoctorAsync(string[] args)
+    {
+        var configPath = ExtractOptionValue(args, "--config") ?? ".";
+        var fix = args.Any(a => string.Equals(a, "--fix", StringComparison.OrdinalIgnoreCase));
+        var targetNodeArg = args.FirstOrDefault(a => !a.StartsWith('-'));
+
+        try
+        {
+            var engine = new VirtualConfigEngine();
+            var tree = engine.Load(configPath);
+            var orchestrator = new ClusterOrchestrator();
+            var nodes = await orchestrator.ResolveNodesAsync(tree).ConfigureAwait(false);
+
+            if (nodes.Count == 0)
+            {
+                AnsiConsole.MarkupLine("[yellow]No active node connections found in configuration.[/]");
+                return 0;
+            }
+
+            var selectedNodes = string.IsNullOrEmpty(targetNodeArg)
+                ? nodes
+                : nodes.Where(n => string.Equals(n.NodeName, targetNodeArg, StringComparison.OrdinalIgnoreCase)).ToList();
+
+            foreach (var node in selectedNodes)
+            {
+                AnsiConsole.MarkupLine($"\n[bold yellow]═══ Pre-Flight Doctor: '{Markup.Escape(node.NodeName)}' ({Markup.Escape(node.Host)}) ═══[/]");
+                var checks = await HostPreflightInspector.RunDiagnosticsAsync(node, fix).ConfigureAwait(false);
+
+                var table = new Table().Border(TableBorder.Rounded).AddColumn("Check").AddColumn("Status").AddColumn("Details");
+                foreach (var c in checks)
+                {
+                    string status;
+                    if (c.Passed)
+                    {
+                        status = c.WasFixed ? "[bold green]FIXED[/]" : "[green]PASS[/]";
+                    }
+                    else
+                    {
+                        status = "[red]FAIL[/]";
+                    }
+                    table.AddRow(c.CheckName, status, c.Details);
+                }
+                AnsiConsole.Write(table);
+            }
+
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]Doctor preflight failed: {Markup.Escape(ex.Message)}[/]");
+            return 1;
+        }
+    }
+
+    private static int HandlePortsCommand(string[] args)
+    {
+        var configPath = ExtractOptionValue(args, "--config") ?? ".";
+        var engine = new VirtualConfigEngine();
+        var tree = engine.Load(configPath);
+
+        var ports = DomainEndpointAllocator.ListPorts(tree);
+        var table = new Table().Border(TableBorder.Rounded)
+            .AddColumn("Rule Name")
+            .AddColumn("From")
+            .AddColumn("To")
+            .AddColumn("Proto")
+            .AddColumn("Family");
+
+        foreach (var p in ports)
+        {
+            table.AddRow(p.RuleName, p.From, p.To, p.Protocol, p.Family);
+        }
+
+        AnsiConsole.Write(table);
+        return 0;
+    }
+
+    private static int HandleDomainsCommand(string[] args)
+    {
+        var configPath = ExtractOptionValue(args, "--config") ?? ".";
+        var engine = new VirtualConfigEngine();
+        var tree = engine.Load(configPath);
+
+        var routes = DomainRoutingService.TraverseDomains(tree);
+        var table = new Table().Border(TableBorder.Rounded)
+            .AddColumn("Hostname")
+            .AddColumn("Zone")
+            .AddColumn("Target")
+            .AddColumn("Node")
+            .AddColumn("Entry Port");
+
+        foreach (var r in routes)
+        {
+            var target = !string.IsNullOrEmpty(r.SniTarget) ? $"sni://{r.SniTarget}" : (r.HttpTarget ?? "-");
+            table.AddRow(r.FullHostname, r.ZoneDomain, target, r.TargetNode ?? "auto", r.EntryPort.ToString(CultureInfo.InvariantCulture));
+        }
+
+        AnsiConsole.Write(table);
+        return 0;
+    }
+
+    private static int HandleExposeCommand(string[] args)
+    {
+        if (args.Length < 2)
+        {
+            AnsiConsole.MarkupLine("[red]Usage: starry expose <service> <targetPort> [--family ipv4|ipv6|both] [--port <num|random>] [--proto tcp|udp] [--rule-name <name>] [--config <dir>][/]");
+            return 1;
+        }
+
+        var service = args[0];
+        if (!int.TryParse(args[1], CultureInfo.InvariantCulture, out var targetPort))
+        {
+            AnsiConsole.MarkupLine($"[red]Invalid target port: {Markup.Escape(args[1])}[/]");
+            return 1;
+        }
+
+        var configPath = ExtractOptionValue(args, "--config") ?? ".";
+        var family = ExtractOptionValue(args, "--family") ?? "both";
+        var proto = ExtractOptionValue(args, "--proto") ?? "tcp";
+        var portStr = ExtractOptionValue(args, "--port");
+        var ruleName = ExtractOptionValue(args, "--rule-name") ?? $"{service}-{targetPort}";
+
+        int? requestedPort = null;
+        if (!string.IsNullOrEmpty(portStr) && !string.Equals(portStr, "random", StringComparison.OrdinalIgnoreCase) && int.TryParse(portStr, CultureInfo.InvariantCulture, out var p))
+        {
+            requestedPort = p;
+        }
+
+        var engine = new VirtualConfigEngine();
+        var tree = engine.Load(configPath, resolveGraph: false);
+        var allocated = DomainEndpointAllocator.ExposeService(tree, ruleName, service, targetPort, family, requestedPort, proto);
+
+        engine.Split(tree, configPath, "yaml");
+        AnsiConsole.MarkupLine($"[bold green]✓ Successfully exposed service '{Markup.Escape(service)}' on '{Markup.Escape(allocated.From)}' -> '{Markup.Escape(allocated.To)}'[/]");
+        return 0;
     }
 
     private static async Task<int> HandlePlanCommand(string[] args)
@@ -8856,7 +9446,7 @@ internal static class Program
 
 ## File: src/Starry.Core/Backups/IBackupStorageProvider.cs
 
-**Lines**: 13 | **Size**: 485 B | **Language**: csharp
+**Lines**: 14 | **Size**: 587 B | **Language**: csharp
 
 ```csharp
 using Starry.Core.Nodes;
@@ -8869,6 +9459,7 @@ namespace Starry.Core.Backups;
 public interface IBackupStorageProvider
 {
     string TypeName { get; }
+    Task<bool> HasBackupAsync(INodeConnection node, string backupId, CancellationToken ct = default);
     Task StreamBackupAsync(INodeConnection node, string volumePath, string backupId, CancellationToken ct = default);
     Task StreamRestoreAsync(INodeConnection node, string backupId, string targetVolumePath, CancellationToken ct = default);
 }
@@ -8876,7 +9467,7 @@ public interface IBackupStorageProvider
 
 ## File: src/Starry.Core/Configuration/ConfigTree.cs
 
-**Lines**: 78 | **Size**: 2.2 KB | **Language**: csharp
+**Lines**: 91 | **Size**: 2.6 KB | **Language**: csharp
 
 ```csharp
 using System.Text.Json.Nodes;
@@ -8914,11 +9505,24 @@ public sealed class ConfigTree
         var segments = path.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         JsonNode? current = Root;
 
-        foreach (var segment in segments)
+        for (var i = 0; i < segments.Length; i++)
         {
-            if (current is JsonObject obj && obj.TryGetPropertyValue(segment, out var next))
+            var segment = segments[i];
+            if (current is JsonObject obj)
             {
-                current = next;
+                if (obj.TryGetPropertyValue(segment, out var next))
+                {
+                    current = next;
+                }
+                else
+                {
+                    var remaining = string.Join(".", segments[i..]);
+                    if (obj.TryGetPropertyValue(remaining, out var remainingVal))
+                    {
+                        return remainingVal;
+                    }
+                    return null;
+                }
             }
             else
             {
@@ -9886,7 +10490,7 @@ module ConfigAst =
 
 ## File: src/Starry.Dsl/Generators.fs
 
-**Lines**: 236 | **Size**: 11.1 KB | **Language**: fsharp
+**Lines**: 248 | **Size**: 11.7 KB | **Language**: fsharp
 
 ```fsharp
 namespace Starry.Dsl
@@ -10021,8 +10625,10 @@ module Generators =
         sb.AppendLine("    chain forward {") |> ignore
         sb.AppendLine("        type filter hook forward priority filter; policy drop;") |> ignore
         sb.AppendLine("        ct state established,related accept") |> ignore
-        sb.AppendLine("        iifname \"starry0\" oifname \"starry0\" ip6 saddr . ip6 daddr @allowed_mesh_pairs accept") |> ignore
-        sb.AppendLine("        iifname \"starry0\" oifname \"starry0\" accept") |> ignore
+        if allowedSubnetPairs.Length > 0 then
+            sb.AppendLine("        iifname \"starry0\" oifname \"starry0\" ip6 saddr . ip6 daddr @allowed_mesh_pairs accept") |> ignore
+        else
+            sb.AppendLine("        iifname \"starry0\" oifname \"starry0\" accept") |> ignore
         sb.AppendLine("        iifname \"starry0\" accept") |> ignore
         sb.AppendLine("        oifname \"starry0\" accept") |> ignore
         sb.AppendLine("    }") |> ignore
@@ -10035,13 +10641,23 @@ module Generators =
             let proto = rule.Protocol.ToLowerInvariant()
             let protoList = if proto = "both" then [ "tcp"; "udp" ] else [ proto ]
             for p in protoList do
+                let isTargetIpv6 = rule.TargetIpv6.Contains(":")
                 match rule.AddressFamily.ToLowerInvariant() with
                 | "ipv4" ->
-                    sb.AppendLine(sprintf "        meta nfproto ipv4 %s dport %d dnat to [%s]:%d" p rule.HostPort rule.TargetIpv6 rule.TargetPort) |> ignore
+                    if isTargetIpv6 then
+                        ()
+                    else
+                        sb.AppendLine(sprintf "        meta nfproto ipv4 %s dport %d dnat ip to %s:%d" p rule.HostPort rule.TargetIpv6 rule.TargetPort) |> ignore
                 | "ipv6" ->
-                    sb.AppendLine(sprintf "        meta nfproto ipv6 %s dport %d dnat to [%s]:%d" p rule.HostPort rule.TargetIpv6 rule.TargetPort) |> ignore
+                    if isTargetIpv6 then
+                        sb.AppendLine(sprintf "        meta nfproto ipv6 %s dport %d dnat ip6 to [%s]:%d" p rule.HostPort rule.TargetIpv6 rule.TargetPort) |> ignore
+                    else
+                        sb.AppendLine(sprintf "        meta nfproto ipv6 %s dport %d dnat ip to %s:%d" p rule.HostPort rule.TargetIpv6 rule.TargetPort) |> ignore
                 | _ ->
-                    sb.AppendLine(sprintf "        %s dport %d dnat to [%s]:%d" p rule.HostPort rule.TargetIpv6 rule.TargetPort) |> ignore
+                    if isTargetIpv6 then
+                        sb.AppendLine(sprintf "        meta nfproto ipv6 %s dport %d dnat ip6 to [%s]:%d" p rule.HostPort rule.TargetIpv6 rule.TargetPort) |> ignore
+                    else
+                        sb.AppendLine(sprintf "        %s dport %d dnat to %s:%d" p rule.HostPort rule.TargetIpv6 rule.TargetPort) |> ignore
         sb.AppendLine("    }") |> ignore
         sb.AppendLine() |> ignore
 
@@ -10376,7 +10992,7 @@ module Say =
 
 ## File: src/Starry.Infrastructure/Agent/AgentOptions.cs
 
-**Lines**: 31 | **Size**: 1.1 KB | **Language**: csharp
+**Lines**: 33 | **Size**: 1.2 KB | **Language**: csharp
 
 ```csharp
 using System.Net;
@@ -10390,6 +11006,8 @@ public sealed record AgentOptions
     public IReadOnlyDictionary<string, string> InternalDnsRecords { get; init; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
     public TimeSpan HealthCheckInterval { get; init; } = TimeSpan.FromSeconds(30);
     public IReadOnlyList<BackupPolicy> BackupPolicies { get; init; } = [];
+    public IReadOnlyList<Starry.Core.Containers.ServiceSpec> DesiredServices { get; init; } = [];
+    public string? DesiredNftablesRuleset { get; init; }
     public string? NodeName { get; init; }
 
     public AgentOptions WithDnsRecord(string domain, string ip)
@@ -10489,7 +11107,7 @@ public sealed class DriftEventArgs : EventArgs
 
 ## File: src/Starry.Infrastructure/Agent/StarryAgentDaemon.cs
 
-**Lines**: 656 | **Size**: 24.2 KB | **Language**: csharp
+**Lines**: 733 | **Size**: 27.5 KB | **Language**: csharp
 
 ```csharp
 using System.Collections.Concurrent;
@@ -10684,8 +11302,13 @@ public sealed class StarryAgentDaemon : IAsyncDisposable
     /// Executes a single health monitoring and reconciliation cycle.
     /// Detects stopped/exited managed containers and restarts them via Docker/Podman socket API.
     /// </summary>
+    public Task<int> PerformHealthCheckAndReconcileAsync(CancellationToken ct = default)
+    {
+        return PerformHealthCheckAndReconcileAsync(options: null, ct);
+    }
+
     [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "Loop must continue if container listing fails")]
-    public async Task<int> PerformHealthCheckAndReconcileAsync(CancellationToken ct = default)
+    public async Task<int> PerformHealthCheckAndReconcileAsync(AgentOptions? options, CancellationToken ct = default)
     {
         _logger?.Invoke("Performing container drift detection...");
 
@@ -10709,7 +11332,79 @@ public sealed class StarryAgentDaemon : IAsyncDisposable
             }
         }
 
+        if (options != null)
+        {
+            restartedCount += await ReconcileDesiredServicesAsync(options.DesiredServices, containers, ct).ConfigureAwait(false);
+            await ReconcileNftablesAsync(options.DesiredNftablesRuleset, ct).ConfigureAwait(false);
+        }
+
         return restartedCount;
+    }
+
+    private async Task<int> ReconcileDesiredServicesAsync(
+        IReadOnlyList<ServiceSpec> desiredServices,
+        IReadOnlyList<ContainerState> containers,
+        CancellationToken ct)
+    {
+        var restoredCount = 0;
+        foreach (var desired in desiredServices)
+        {
+            var match = containers.FirstOrDefault(c => string.Equals(c.Name, desired.Name, StringComparison.OrdinalIgnoreCase));
+            var desiredHash = BaseSocketContainerRuntime.ComputeSpecHash(desired);
+            var missingOrDrifted = match == null || !match.IsRunning ||
+                (match.Labels.TryGetValue("starry.spec.hash", out var h) && !string.Equals(h, desiredHash, StringComparison.Ordinal));
+
+            if (missingOrDrifted)
+            {
+                _logger?.Invoke($"Restoring missing/drifted desired service '{desired.Name}'...");
+                try
+                {
+                    await _runtime.DeployContainerAsync(_nodeConnection, desired, ct).ConfigureAwait(false);
+                    RecordDriftEvent(new DriftEvent(
+                        ContainerId: match?.Id ?? string.Empty,
+                        ContainerName: desired.Name,
+                        Reason: "Desired service missing or spec hash drifted",
+                        TimestampUtc: DateTime.UtcNow,
+                        RestartTriggered: true,
+                        RestartSucceeded: true,
+                        Details: "Successfully reconciled container"));
+                    restoredCount++;
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    RecordDriftEvent(new DriftEvent(
+                        ContainerId: match?.Id ?? string.Empty,
+                        ContainerName: desired.Name,
+                        Reason: $"Reconciliation failed: {ex.Message}",
+                        TimestampUtc: DateTime.UtcNow,
+                        RestartTriggered: true,
+                        RestartSucceeded: false,
+                        Details: ex.ToString()));
+                }
+            }
+        }
+        return restoredCount;
+    }
+
+    private async Task ReconcileNftablesAsync(string? desiredRuleset, CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(desiredRuleset))
+        {
+            return;
+        }
+
+        var checkSpec = new ProcessSpec
+        {
+            Executable = "nft",
+            Arguments = ["list", "table", "inet", "starry"]
+        };
+
+        var checkRes = await _nodeConnection.ExecuteCommandAsync(checkSpec, ct).ConfigureAwait(false);
+        if (!checkRes.IsSuccess)
+        {
+            _logger?.Invoke("Table 'inet starry' missing in nftables; reapplying desired ruleset...");
+            await NftablesService.ApplyRulesetAsync(_nodeConnection, desiredRuleset, ct).ConfigureAwait(false);
+        }
     }
 
     [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "Daemon must record failed restarts without throwing")]
@@ -10891,7 +11586,7 @@ public sealed class StarryAgentDaemon : IAsyncDisposable
 
         try
         {
-            await PerformHealthCheckAndReconcileAsync(ct).ConfigureAwait(false);
+            await PerformHealthCheckAndReconcileAsync(options, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -10919,7 +11614,7 @@ public sealed class StarryAgentDaemon : IAsyncDisposable
                     break;
                 }
 
-                await PerformHealthCheckAndReconcileAsync(ct).ConfigureAwait(false);
+                await PerformHealthCheckAndReconcileAsync(options, ct).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -11184,7 +11879,7 @@ public sealed record BundleManifest(
 
 ## File: src/Starry.Infrastructure/Backups/FleetBundleService.cs
 
-**Lines**: 131 | **Size**: 4.6 KB | **Language**: csharp
+**Lines**: 161 | **Size**: 5.8 KB | **Language**: csharp
 
 ```csharp
 using System.Formats.Tar;
@@ -11192,6 +11887,8 @@ using System.IO.Compression;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Starry.Core.Configuration;
+using Starry.Core.Nodes;
+using Starry.Core.Processes;
 using Starry.Infrastructure.Configuration;
 
 namespace Starry.Infrastructure.Backups;
@@ -11212,6 +11909,16 @@ public static class FleetBundleService
         string bundleOutputPath,
         VirtualConfigEngine? engine = null)
     {
+        ExportBundleAsync(tree, bundleOutputPath, nodes: null, engine).GetAwaiter().GetResult();
+    }
+
+    public static async Task ExportBundleAsync(
+        ConfigTree tree,
+        string bundleOutputPath,
+        IReadOnlyList<INodeConnection>? nodes = null,
+        VirtualConfigEngine? engine = null,
+        CancellationToken ct = default)
+    {
         ArgumentNullException.ThrowIfNull(tree);
         ArgumentException.ThrowIfNullOrWhiteSpace(bundleOutputPath);
 
@@ -11221,35 +11928,26 @@ public static class FleetBundleService
 
         try
         {
-            // Split configuration into modular folder hierarchy inside staging dir
             configEngine.Split(tree, tempStagingDir, "yaml");
+            WriteBundleManifest(tree, tempStagingDir);
 
-            // Write manifest metadata
-            var clusterName = tree.Root["cluster_name"]?.ToString() ?? "starry-fleet";
-            var nodesList = new List<string>();
-            if (tree.Root["nodes"] is JsonObject nodesObj)
+            if (nodes != null && nodes.Count > 0 && tree.Root["volumes"] is JsonObject volumesObj)
             {
-                nodesList.AddRange(nodesObj.Select(kv => kv.Key));
+                var volDir = Path.Combine(tempStagingDir, "volumes");
+                Directory.CreateDirectory(volDir);
+                foreach (var (volName, _) in volumesObj)
+                {
+                    var targetNode = nodes[0];
+                    var volTarPath = Path.Combine(volDir, $"{volName}.tar.gz");
+                    using var fs = File.Create(volTarPath);
+                    await targetNode.ExecuteStreamingCommandAsync(new ProcessSpec
+                    {
+                        Executable = "sh",
+                        Arguments = ["-c", $"tar -C '/var/lib/docker/volumes/{volName}/_data' -czf - . 2>/dev/null || true"]
+                    }, null, fs, ct).ConfigureAwait(false);
+                }
             }
 
-            var manifestObj = new JsonObject
-            {
-                ["cluster_name"] = clusterName,
-                ["created_at"] = DateTime.UtcNow.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
-                ["starry_version"] = "0.1.0"
-            };
-
-            var nodesArr = new JsonArray();
-            foreach (var node in nodesList)
-            {
-                nodesArr.Add(JsonValue.Create(node));
-            }
-            manifestObj["nodes"] = nodesArr;
-
-            var manifestJson = manifestObj.ToJsonString(IndentedJsonOptions);
-            File.WriteAllText(Path.Combine(tempStagingDir, "manifest.json"), manifestJson);
-
-            // Pack directory into tar.gz
             var outDir = Path.GetDirectoryName(bundleOutputPath);
             if (!string.IsNullOrEmpty(outDir) && !Directory.Exists(outDir))
             {
@@ -11258,7 +11956,7 @@ public static class FleetBundleService
 
             using var fileStream = File.Create(bundleOutputPath);
             using var gzipStream = new GZipStream(fileStream, CompressionLevel.Optimal);
-            TarFile.CreateFromDirectory(tempStagingDir, gzipStream, includeBaseDirectory: false);
+            await TarFile.CreateFromDirectoryAsync(tempStagingDir, gzipStream, includeBaseDirectory: false, ct).ConfigureAwait(false);
         }
         finally
         {
@@ -11267,6 +11965,33 @@ public static class FleetBundleService
                 Directory.Delete(tempStagingDir, recursive: true);
             }
         }
+    }
+
+    private static void WriteBundleManifest(ConfigTree tree, string tempStagingDir)
+    {
+        var clusterName = tree.Root["cluster_name"]?.ToString() ?? "starry-fleet";
+        var nodesList = new List<string>();
+        if (tree.Root["nodes"] is JsonObject nodesObj)
+        {
+            nodesList.AddRange(nodesObj.Select(kv => kv.Key));
+        }
+
+        var manifestObj = new JsonObject
+        {
+            ["cluster_name"] = clusterName,
+            ["created_at"] = DateTime.UtcNow.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
+            ["starry_version"] = "0.1.0"
+        };
+
+        var nodesArr = new JsonArray();
+        foreach (var node in nodesList)
+        {
+            nodesArr.Add(JsonValue.Create(node));
+        }
+        manifestObj["nodes"] = nodesArr;
+
+        var manifestJson = manifestObj.ToJsonString(IndentedJsonOptions);
+        File.WriteAllText(Path.Combine(tempStagingDir, "manifest.json"), manifestJson);
     }
 
     public static ConfigTree ImportBundle(
@@ -11322,7 +12047,7 @@ public static class FleetBundleService
 
 ## File: src/Starry.Infrastructure/Backups/RcloneBackupStorageProvider.cs
 
-**Lines**: 80 | **Size**: 2.8 KB | **Language**: csharp
+**Lines**: 97 | **Size**: 3.5 KB | **Language**: csharp
 
 ```csharp
 using Starry.Core.Backups;
@@ -11345,6 +12070,23 @@ public sealed class RcloneBackupStorageProvider : IBackupStorageProvider
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(remoteDestination);
         _remoteDestination = remoteDestination.TrimEnd('/');
+    }
+
+    public async Task<bool> HasBackupAsync(INodeConnection node, string backupId, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(node);
+        ArgumentException.ThrowIfNullOrWhiteSpace(backupId);
+
+        var remoteTarget = $"{_remoteDestination}/{backupId}.tar.zst";
+        var spec = new ProcessSpec
+        {
+            Executable = "rclone",
+            Arguments = ["size", remoteTarget],
+            Timeout = TimeSpan.FromSeconds(10)
+        };
+
+        var result = await node.ExecuteCommandAsync(spec, ct).ConfigureAwait(false);
+        return result.IsSuccess && !result.StandardOutput.Contains("Total objects: 0", StringComparison.OrdinalIgnoreCase);
     }
 
     public async Task StreamBackupAsync(
@@ -11407,6 +12149,173 @@ public sealed class RcloneBackupStorageProvider : IBackupStorageProvider
 }
 ```
 
+## File: src/Starry.Infrastructure/Backups/S3BackupStorageProvider.cs
+
+**Lines**: 142 | **Size**: 5.0 KB | **Language**: csharp
+
+```csharp
+using Starry.Core.Backups;
+using Starry.Core.Nodes;
+using Starry.Core.Processes;
+
+namespace Starry.Infrastructure.Backups;
+
+/// <summary>
+/// Streaming S3 backup provider executing piped tar -> zstd -> S3 commands
+/// without writing temporary tarballs to the VPS disk.
+/// </summary>
+public sealed class S3BackupStorageProvider : IBackupStorageProvider
+{
+    private readonly S3StorageOptions _options;
+
+    public string TypeName => "s3";
+
+    public S3BackupStorageProvider(S3StorageOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        if (string.IsNullOrWhiteSpace(options.Bucket))
+        {
+            throw new ArgumentException("Bucket must not be null or whitespace.", nameof(options));
+        }
+        _options = options;
+    }
+
+    public async Task<bool> HasBackupAsync(INodeConnection node, string backupId, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(node);
+        ArgumentException.ThrowIfNullOrWhiteSpace(backupId);
+
+        var targetPath = BuildS3TargetPath(backupId);
+        var env = BuildEnvironmentVariables();
+
+        var checkSpec = new ProcessSpec
+        {
+            Executable = "sh",
+            Arguments = ["-c", $"rclone size '{targetPath}' 2>/dev/null || aws s3 ls '{targetPath}' 2>/dev/null"],
+            EnvironmentVariables = env,
+            Timeout = TimeSpan.FromSeconds(15)
+        };
+
+        var result = await node.ExecuteCommandAsync(checkSpec, ct).ConfigureAwait(false);
+        return result.IsSuccess && !result.StandardOutput.Contains("Total objects: 0", StringComparison.OrdinalIgnoreCase);
+    }
+
+    public async Task StreamBackupAsync(
+        INodeConnection node,
+        string volumePath,
+        string backupId,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(node);
+        ArgumentException.ThrowIfNullOrWhiteSpace(volumePath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(backupId);
+
+        var targetPath = BuildS3TargetPath(backupId);
+        var env = BuildEnvironmentVariables();
+
+        var pipeCmd = $"tar -C '{volumePath}' -cf - . | zstd -3 | (rclone rcat '{targetPath}' 2>/dev/null || aws s3 cp - '{targetPath}')";
+
+        var backupSpec = new ProcessSpec
+        {
+            Executable = "sh",
+            Arguments = ["-c", pipeCmd],
+            EnvironmentVariables = env,
+            Timeout = TimeSpan.FromHours(2)
+        };
+
+        var result = await node.ExecuteCommandAsync(backupSpec, ct).ConfigureAwait(false);
+        if (!result.IsSuccess)
+        {
+            throw new InvalidOperationException($"Streaming S3 backup for volume '{volumePath}' failed on '{node.NodeName}': {result.StandardError}");
+        }
+    }
+
+    public async Task StreamRestoreAsync(
+        INodeConnection node,
+        string backupId,
+        string targetVolumePath,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(node);
+        ArgumentException.ThrowIfNullOrWhiteSpace(backupId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(targetVolumePath);
+
+        var targetPath = BuildS3TargetPath(backupId);
+        var env = BuildEnvironmentVariables();
+
+        var pipeCmd = $"mkdir -p '{targetVolumePath}' && (rclone cat '{targetPath}' 2>/dev/null || aws s3 cp '{targetPath}' -) | zstd -d | tar -C '{targetVolumePath}' -xf -";
+
+        var restoreSpec = new ProcessSpec
+        {
+            Executable = "sh",
+            Arguments = ["-c", pipeCmd],
+            EnvironmentVariables = env,
+            Timeout = TimeSpan.FromHours(2)
+        };
+
+        var result = await node.ExecuteCommandAsync(restoreSpec, ct).ConfigureAwait(false);
+        if (!result.IsSuccess)
+        {
+            throw new InvalidOperationException($"Streaming S3 restore for backup '{backupId}' failed on '{node.NodeName}': {result.StandardError}");
+        }
+    }
+
+    private string BuildS3TargetPath(string backupId)
+    {
+        var cleanPrefix = string.IsNullOrWhiteSpace(_options.Prefix) ? string.Empty : $"{_options.Prefix.Trim('/')}/";
+        return $":s3:{_options.Bucket}/{cleanPrefix}{backupId}.tar.zst";
+    }
+
+    private Dictionary<string, string> BuildEnvironmentVariables()
+    {
+        var env = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["RCLONE_CONFIG_S3_TYPE"] = "s3",
+            ["RCLONE_CONFIG_S3_PROVIDER"] = "AWS",
+            ["RCLONE_CONFIG_S3_REGION"] = _options.Region ?? "us-east-1"
+        };
+
+        if (!string.IsNullOrEmpty(_options.Endpoint))
+        {
+            env["RCLONE_CONFIG_S3_ENDPOINT"] = _options.Endpoint;
+            env["AWS_ENDPOINT_URL"] = _options.Endpoint;
+        }
+
+        if (!string.IsNullOrEmpty(_options.AccessKey))
+        {
+            env["RCLONE_CONFIG_S3_ACCESS_KEY_ID"] = _options.AccessKey;
+            env["AWS_ACCESS_KEY_ID"] = _options.AccessKey;
+        }
+
+        if (!string.IsNullOrEmpty(_options.SecretKey))
+        {
+            env["RCLONE_CONFIG_S3_SECRET_ACCESS_KEY"] = _options.SecretKey;
+            env["AWS_SECRET_ACCESS_KEY"] = _options.SecretKey;
+        }
+
+        return env;
+    }
+}
+```
+
+## File: src/Starry.Infrastructure/Backups/S3StorageOptions.cs
+
+**Lines**: 11 | **Size**: 368 B | **Language**: csharp
+
+```csharp
+namespace Starry.Infrastructure.Backups;
+
+public sealed record S3StorageOptions
+{
+    public string Bucket { get; init; } = string.Empty;
+    public string? Endpoint { get; init; }
+    public string? Region { get; init; } = "us-east-1";
+    public string? AccessKey { get; init; }
+    public string? SecretKey { get; init; }
+    public string? Prefix { get; init; }
+}
+```
+
 ## File: src/Starry.Infrastructure/Configuration/ConfigValidationResult.cs
 
 **Lines**: 5 | **Size**: 155 B | **Language**: csharp
@@ -11421,7 +12330,7 @@ public sealed record ConfigValidationResult(
 
 ## File: src/Starry.Infrastructure/Configuration/ConfigValidator.cs
 
-**Lines**: 170 | **Size**: 7.0 KB | **Language**: csharp
+**Lines**: 174 | **Size**: 7.2 KB | **Language**: csharp
 
 ```csharp
 using System.Globalization;
@@ -11482,7 +12391,11 @@ public static class ConfigValidator
                 if (nodeObj.TryGetPropertyValue("vpn_ip", out var vpnIpVal) && vpnIpVal != null)
                 {
                     var ipStr = vpnIpVal.ToString();
-                    if (!IPAddress.TryParse(ipStr, out _))
+                    if (!string.IsNullOrWhiteSpace(ipStr) &&
+                        !ipStr.StartsWith("ENC[", StringComparison.Ordinal) &&
+                        !ipStr.StartsWith("PLAIN[", StringComparison.Ordinal) &&
+                        !ipStr.StartsWith('$') &&
+                        !IPAddress.TryParse(ipStr, out _))
                     {
                         issues.Add(new ValidationIssue($"{nodePath}.vpn_ip", $"Node '{nodeName}' has invalid VPN IP address: '{ipStr}'.", sourceEntry?.FilePath));
                     }
@@ -11708,7 +12621,7 @@ public sealed class JsonConfigFormatProvider : IConfigFormatProvider
 
 ## File: src/Starry.Infrastructure/Configuration/RepositoryInitializer.cs
 
-**Lines**: 81 | **Size**: 2.9 KB | **Language**: csharp
+**Lines**: 127 | **Size**: 4.6 KB | **Language**: csharp
 
 ```csharp
 using Starry.Infrastructure.Security;
@@ -11734,7 +12647,53 @@ public static class RepositoryInitializer
         WriteDefaultConfigs(targetDir, projectName);
 
         var masterKey = CryptoService.GenerateMasterKeyBase64();
+        SaveMasterKeyFile(targetDir, masterKey);
+        TrySyncMasterKeyToGitHub(masterKey);
         return (masterKey, targetDir);
+    }
+
+    private static void SaveMasterKeyFile(string targetDir, string masterKey)
+    {
+        var starryDir = Path.Combine(targetDir, ".starry");
+        Directory.CreateDirectory(starryDir);
+        var keyPath = Path.Combine(starryDir, "master.key");
+        File.WriteAllText(keyPath, masterKey.Trim() + "\n");
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(keyPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+    }
+
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "Best effort GitHub CLI secret push")]
+    private static void TrySyncMasterKeyToGitHub(string masterKey)
+    {
+        try
+        {
+            var runner = new Starry.Infrastructure.Processes.ProcessRunner();
+            var gitRes = runner.RunAsync(new Starry.Core.Processes.ProcessSpec
+            {
+                Executable = "git",
+                Arguments = ["remote", "-v"],
+                Timeout = TimeSpan.FromSeconds(2)
+            }).GetAwaiter().GetResult();
+
+            if (!gitRes.IsSuccess || string.IsNullOrWhiteSpace(gitRes.StandardOutput))
+            {
+                return;
+            }
+
+            runner.RunAsync(new Starry.Core.Processes.ProcessSpec
+            {
+                Executable = "gh",
+                Arguments = ["secret", "set", "STARRY_MASTER_KEY"],
+                StandardInputBytes = System.Text.Encoding.UTF8.GetBytes(masterKey),
+                Timeout = TimeSpan.FromSeconds(5)
+            }).GetAwaiter().GetResult();
+        }
+        catch
+        {
+            // gh or git not available or timed out
+        }
     }
 
     private static void CreateDirectories(string targetDir)
@@ -11967,7 +12926,7 @@ public sealed record ValidationIssue(
 
 ## File: src/Starry.Infrastructure/Configuration/VirtualConfigEngine.cs
 
-**Lines**: 472 | **Size**: 17.5 KB | **Language**: csharp
+**Lines**: 507 | **Size**: 18.9 KB | **Language**: csharp
 
 ```csharp
 using System.Text.Json;
@@ -12197,6 +13156,25 @@ public sealed class VirtualConfigEngine
             var relInsideFiles = Path.GetRelativePath(filesDir, rf).Replace('\\', '/');
             var content = File.ReadAllText(rf);
             filesObj[relInsideFiles] = JsonValue.Create(content);
+
+            var segments = relInsideFiles.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            var current = filesObj;
+            for (var i = 0; i < segments.Length - 1; i++)
+            {
+                var seg = segments[i];
+                if (!current.TryGetPropertyValue(seg, out var next) || next is not JsonObject nextObj)
+                {
+                    nextObj = new JsonObject();
+                    current[seg] = nextObj;
+                }
+                current = nextObj;
+            }
+            if (segments.Length > 0)
+            {
+                current[segments[^1]] = JsonValue.Create(content);
+            }
+
+            tree.RegisterSource($"files.{relInsideFiles.Replace('/', '.')}", new SourceMapEntry($"files.{relInsideFiles.Replace('/', '.')}", rel));
             tree.RegisterSource($"files.{relInsideFiles}", new SourceMapEntry($"files.{relInsideFiles}", rel));
         }
     }
@@ -12230,6 +13208,7 @@ public sealed class VirtualConfigEngine
         foreach (var (propName, propVal) in obj)
         {
             var currentPath = string.IsNullOrEmpty(prefix) ? propName : $"{prefix}.{propName}";
+            tree.RegisterSource(currentPath, new SourceMapEntry(currentPath, filePath));
             if (propVal is JsonObject childObj)
             {
                 PopulateObjectIntoTree(tree, childObj, currentPath, filePath);
@@ -12342,11 +13321,26 @@ public sealed class VirtualConfigEngine
     private static void WriteRawFilesSubtree(string filesDir, JsonObject filesObj)
     {
         Directory.CreateDirectory(filesDir);
-        foreach (var (name, contentVal) in filesObj)
+        WriteRawFilesSubtreeRecursive(filesDir, filesObj, string.Empty);
+    }
+
+    private static void WriteRawFilesSubtreeRecursive(string baseDir, JsonObject currentObj, string currentRel)
+    {
+        foreach (var (name, val) in currentObj)
         {
-            if (contentVal is JsonValue jv)
+            if (name.Contains('/', StringComparison.Ordinal))
             {
-                var filePath = Path.Combine(filesDir, name);
+                continue;
+            }
+
+            var nextRel = string.IsNullOrEmpty(currentRel) ? name : $"{currentRel}/{name}";
+            if (val is JsonObject nestedObj)
+            {
+                WriteRawFilesSubtreeRecursive(baseDir, nestedObj, nextRel);
+            }
+            else if (val is JsonValue jv)
+            {
+                var filePath = Path.Combine(baseDir, nextRel.Replace('/', Path.DirectorySeparatorChar));
                 var pDir = Path.GetDirectoryName(filePath);
                 if (!string.IsNullOrEmpty(pDir))
                 {
@@ -12600,7 +13594,7 @@ public sealed class YamlConfigFormatProvider : IConfigFormatProvider
 
 ## File: src/Starry.Infrastructure/Containers/BaseSocketContainerRuntime.cs
 
-**Lines**: 492 | **Size**: 19.0 KB | **Language**: csharp
+**Lines**: 566 | **Size**: 22.9 KB | **Language**: csharp
 
 ```csharp
 using System.Globalization;
@@ -12749,8 +13743,16 @@ public abstract class BaseSocketContainerRuntime : IContainerRuntime
 
         if (existing != null)
         {
-            await ReconcileExistingContainerAsync(client, existing, filesChanged, ct).ConfigureAwait(false);
-            return;
+            var shouldRecreate = await CheckContainerDriftAsync(client, existing, spec, ct).ConfigureAwait(false);
+            if (shouldRecreate)
+            {
+                await client.DeleteAsync(new Uri(BaseDockerUri, $"{ApiVersionPrefix}/containers/{existing.Id}?force=true"), ct).ConfigureAwait(false);
+            }
+            else
+            {
+                await ReconcileExistingContainerAsync(client, existing, filesChanged, ct).ConfigureAwait(false);
+                return;
+            }
         }
 
         // If VIP address is specified, ensure it is assigned to starry0 interface on the node
@@ -12795,6 +13797,71 @@ public abstract class BaseSocketContainerRuntime : IContainerRuntime
         {
             await StartContainerAsync(client, existing.Id, ct).ConfigureAwait(false);
         }
+    }
+
+    private static async Task<bool> CheckContainerDriftAsync(HttpClient client, ContainerState existing, ServiceSpec spec, CancellationToken ct)
+    {
+        try
+        {
+            var inspectRes = await client.GetAsync(new Uri(BaseDockerUri, $"{ApiVersionPrefix}/containers/{existing.Id}/json"), ct).ConfigureAwait(false);
+            if (!inspectRes.IsSuccessStatusCode)
+            {
+                return false;
+            }
+
+            var inspectStr = await inspectRes.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            var inspectJson = JsonNode.Parse(inspectStr) as JsonObject;
+            var runningSpecHash = inspectJson?["Config"]?["Labels"]?["starry.spec.hash"]?.ToString();
+            var runningImageId = inspectJson?["Image"]?.ToString();
+
+            string? latestImageId = null;
+            var imgRes = await client.GetAsync(new Uri(BaseDockerUri, $"{ApiVersionPrefix}/images/{Uri.EscapeDataString(spec.Image)}/json"), ct).ConfigureAwait(false);
+            if (imgRes.IsSuccessStatusCode)
+            {
+                var imgStr = await imgRes.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                var imgJson = JsonNode.Parse(imgStr) as JsonObject;
+                latestImageId = imgJson?["Id"]?.ToString();
+            }
+
+            var desiredSpecHash = ComputeSpecHash(spec);
+            var specHashChanged = !string.IsNullOrEmpty(runningSpecHash) && !string.Equals(runningSpecHash, desiredSpecHash, StringComparison.Ordinal);
+            var imageDigestChanged = !string.IsNullOrEmpty(latestImageId) && !string.IsNullOrEmpty(runningImageId) && !string.Equals(runningImageId, latestImageId, StringComparison.Ordinal);
+
+            return specHashChanged || imageDigestChanged;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return false;
+        }
+    }
+
+    public static string ComputeSpecHash(ServiceSpec spec)
+    {
+        ArgumentNullException.ThrowIfNull(spec);
+        var sb = new StringBuilder();
+        sb.Append(spec.Image).Append('|')
+          .Append(spec.Command).Append('|')
+          .Append(spec.Entrypoint).Append('|')
+          .Append(spec.WorkingDir).Append('|')
+          .Append(spec.User).Append('|')
+          .Append(spec.Privileged).Append('|')
+          .Append(spec.NetworkMode).Append('|')
+          .Append(spec.ShmSize).Append('|')
+          .Append(spec.MemLimit).Append('|')
+          .Append(spec.Cpus).Append('|')
+          .Append(spec.Egress).Append('|')
+          .Append(string.Join(",", spec.Ports.OrderBy(x => x, StringComparer.Ordinal))).Append('|')
+          .Append(string.Join(",", spec.Volumes.OrderBy(x => x, StringComparer.Ordinal))).Append('|')
+          .Append(string.Join(",", spec.Networks.OrderBy(x => x, StringComparer.Ordinal))).Append('|')
+          .Append(string.Join(",", spec.CapAdd.OrderBy(x => x, StringComparer.Ordinal))).Append('|')
+          .Append(string.Join(",", spec.CapDrop.OrderBy(x => x, StringComparer.Ordinal))).Append('|')
+          .Append(string.Join(",", spec.Devices.OrderBy(x => x, StringComparer.Ordinal))).Append('|')
+          .Append(string.Join(",", spec.ExtraHosts.OrderBy(x => x, StringComparer.Ordinal))).Append('|')
+          .Append(string.Join(",", spec.Environment.OrderBy(x => x.Key, StringComparer.Ordinal).Select(x => $"{x.Key}={x.Value}"))).Append('|')
+          .Append(string.Join(",", spec.Files.OrderBy(x => x.Key, StringComparer.Ordinal).Select(x => $"{x.Key}={x.Value}")));
+
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(sb.ToString()));
+        return Convert.ToHexStringLower(hash);
     }
 
     public async Task StreamImagePeerToPeerAsync(
@@ -12910,6 +13977,7 @@ public abstract class BaseSocketContainerRuntime : IContainerRuntime
         }
         labels["managed-by"] = "starry";
         labels["starry.priority"] = spec.Priority.ToString(CultureInfo.InvariantCulture);
+        labels["starry.spec.hash"] = ComputeSpecHash(spec);
 
         var (exposedPorts, portBindings) = BuildPortConfigurations(spec.Ports);
         var hostConfig = BuildHostConfig(spec, binds, portBindings);
@@ -13180,6 +14248,257 @@ public sealed class PodmanRuntime : BaseSocketContainerRuntime
         "/run/user/0/podman/podman.sock"
     ];
 }
+```
+
+## File: src/Starry.Infrastructure/Diagnostics/HostPreflightInspector.cs
+
+**Lines**: 230 | **Size**: 9.2 KB | **Language**: csharp
+
+```csharp
+using System.Globalization;
+using Starry.Core.Nodes;
+using Starry.Core.Processes;
+
+namespace Starry.Infrastructure.Diagnostics;
+
+/// <summary>
+/// Probes remote host diagnostics for Starry requirements:
+/// UTC clock skew, sysctls, port 53 conflicts, tun device, nftables, SELinux, and disk/inode space.
+/// </summary>
+public static class HostPreflightInspector
+{
+    public static async Task<IReadOnlyList<PreflightCheckResult>> RunDiagnosticsAsync(
+        INodeConnection node,
+        bool fix = false,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(node);
+
+        var results = new List<PreflightCheckResult>
+        {
+            await CheckClockSkewAsync(node, ct).ConfigureAwait(false),
+            await CheckSysctlsAsync(node, fix, ct).ConfigureAwait(false),
+            await CheckPort53ConflictAsync(node, fix, ct).ConfigureAwait(false),
+            await CheckTunDeviceAsync(node, ct).ConfigureAwait(false),
+            await CheckNftablesAsync(node, ct).ConfigureAwait(false),
+            await CheckSELinuxAsync(node, ct).ConfigureAwait(false),
+            await CheckDiskSpaceAsync(node, ct).ConfigureAwait(false),
+            await CheckInodesAsync(node, ct).ConfigureAwait(false)
+        };
+
+        return results;
+    }
+
+    private static async Task<PreflightCheckResult> CheckClockSkewAsync(INodeConnection node, CancellationToken ct)
+    {
+        var result = await node.ExecuteCommandAsync(new ProcessSpec
+        {
+            Executable = "date",
+            Arguments = ["-u", "+%s"]
+        }, ct).ConfigureAwait(false);
+
+        if (!result.IsSuccess || !long.TryParse(result.StandardOutput.Trim(), CultureInfo.InvariantCulture, out var remoteSeconds))
+        {
+            return new PreflightCheckResult("UTC Clock Skew", false, "Unable to query remote system clock.");
+        }
+
+        var localSeconds = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var diff = Math.Abs(localSeconds - remoteSeconds);
+
+        if (diff > 30)
+        {
+            return new PreflightCheckResult("UTC Clock Skew", false, $"Clock skew is {diff}s (exceeds 30s threshold). WireGuard handshakes may fail.");
+        }
+
+        return new PreflightCheckResult("UTC Clock Skew", true, $"Clock synchronized (skew: {diff}s).");
+    }
+
+    private static async Task<PreflightCheckResult> CheckSysctlsAsync(INodeConnection node, bool fix, CancellationToken ct)
+    {
+        var requiredFlags = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["net.ipv4.ip_forward"] = "1",
+            ["net.ipv6.conf.all.forwarding"] = "1",
+            ["net.ipv4.ip_nonlocal_bind"] = "1",
+            ["net.ipv6.conf.all.proxy_ndp"] = "1"
+        };
+
+        var missing = new List<string>();
+        foreach (var (k, v) in requiredFlags)
+        {
+            var res = await node.ExecuteCommandAsync(new ProcessSpec
+            {
+                Executable = "sysctl",
+                Arguments = ["-n", k]
+            }, ct).ConfigureAwait(false);
+
+            if (!res.IsSuccess || !string.Equals(res.StandardOutput.Trim(), v, StringComparison.Ordinal))
+            {
+                missing.Add(k);
+            }
+        }
+
+        if (missing.Count == 0)
+        {
+            return new PreflightCheckResult("Sysctl Routing Flags", true, "All kernel IP forwarding and proxy NDP flags enabled.");
+        }
+
+        if (fix)
+        {
+            foreach (var flag in missing)
+            {
+                await node.ExecuteCommandAsync(new ProcessSpec
+                {
+                    Executable = "sysctl",
+                    Arguments = ["-w", $"{flag}=1"]
+                }, ct).ConfigureAwait(false);
+            }
+            return new PreflightCheckResult("Sysctl Routing Flags", true, $"Enabled sysctls: {string.Join(", ", missing)}.", WasFixed: true);
+        }
+
+        return new PreflightCheckResult("Sysctl Routing Flags", false, $"Missing required sysctls: {string.Join(", ", missing)} (run with --fix).");
+    }
+
+    private static async Task<PreflightCheckResult> CheckPort53ConflictAsync(INodeConnection node, bool fix, CancellationToken ct)
+    {
+        var res = await node.ExecuteCommandAsync(new ProcessSpec
+        {
+            Executable = "sh",
+            Arguments = ["-c", "ss -lntup 'sport = :53' 2>/dev/null || netstat -lntup 2>/dev/null | grep ':53 ' || true"]
+        }, ct).ConfigureAwait(false);
+
+        var output = res.StandardOutput.Trim();
+        var hasResolved = output.Contains("systemd-resolved", StringComparison.OrdinalIgnoreCase);
+
+        if (!hasResolved)
+        {
+            return new PreflightCheckResult("DNS Port 53", true, "Port 53 is available for Starry embedded DNS.");
+        }
+
+        if (fix)
+        {
+            var fixCmd = "systemctl stop systemd-resolved 2>/dev/null && systemctl disable systemd-resolved 2>/dev/null || true";
+            await node.ExecuteCommandAsync(new ProcessSpec { Executable = "sh", Arguments = ["-c", fixCmd] }, ct).ConfigureAwait(false);
+            return new PreflightCheckResult("DNS Port 53", true, "Stopped and disabled systemd-resolved on port 53.", WasFixed: true);
+        }
+
+        return new PreflightCheckResult("DNS Port 53", false, "Port 53 is bound by systemd-resolved (run with --fix to disable).");
+    }
+
+    private static async Task<PreflightCheckResult> CheckTunDeviceAsync(INodeConnection node, CancellationToken ct)
+    {
+        var res = await node.ExecuteCommandAsync(new ProcessSpec
+        {
+            Executable = "test",
+            Arguments = ["-c", "/dev/net/tun"]
+        }, ct).ConfigureAwait(false);
+
+        if (res.IsSuccess)
+        {
+            return new PreflightCheckResult("WireGuard TUN Device", true, "/dev/net/tun is available.");
+        }
+
+        return new PreflightCheckResult("WireGuard TUN Device", false, "/dev/net/tun is missing or inaccessible.");
+    }
+
+    private static async Task<PreflightCheckResult> CheckNftablesAsync(INodeConnection node, CancellationToken ct)
+    {
+        var res = await node.ExecuteCommandAsync(new ProcessSpec
+        {
+            Executable = "nft",
+            Arguments = ["-v"]
+        }, ct).ConfigureAwait(false);
+
+        if (res.IsSuccess)
+        {
+            return new PreflightCheckResult("Firewall (nftables)", true, $"nftables present: {res.StandardOutput.Trim()}");
+        }
+
+        return new PreflightCheckResult("Firewall (nftables)", false, "nftables is not installed or not in PATH.");
+    }
+
+    private static async Task<PreflightCheckResult> CheckSELinuxAsync(INodeConnection node, CancellationToken ct)
+    {
+        var res = await node.ExecuteCommandAsync(new ProcessSpec
+        {
+            Executable = "sh",
+            Arguments = ["-c", "getenforce 2>/dev/null || echo 'Disabled'"]
+        }, ct).ConfigureAwait(false);
+
+        var mode = res.StandardOutput.Trim();
+        var isEnforcing = string.Equals(mode, "Enforcing", StringComparison.OrdinalIgnoreCase);
+
+        return new PreflightCheckResult("SELinux", !isEnforcing, $"Current status: {mode}{(isEnforcing ? " (may require container: permissive or policy adjustments)" : string.Empty)}");
+    }
+
+    private static async Task<PreflightCheckResult> CheckDiskSpaceAsync(INodeConnection node, CancellationToken ct)
+    {
+        var res = await node.ExecuteCommandAsync(new ProcessSpec
+        {
+            Executable = "df",
+            Arguments = ["-m", "/"]
+        }, ct).ConfigureAwait(false);
+
+        var lines = res.StandardOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        if (lines.Length >= 2)
+        {
+            var parts = lines[1].Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length >= 4 && long.TryParse(parts[3], CultureInfo.InvariantCulture, out var availMb))
+            {
+                if (availMb < 2048)
+                {
+                    return new PreflightCheckResult("Disk Space (/)", false, $"Low disk space: {availMb} MB free (minimum recommended: 2048 MB).");
+                }
+                return new PreflightCheckResult("Disk Space (/)", true, $"{availMb} MB free.");
+            }
+        }
+
+        return new PreflightCheckResult("Disk Space (/)", true, "Disk space probe succeeded.");
+    }
+
+    private static async Task<PreflightCheckResult> CheckInodesAsync(INodeConnection node, CancellationToken ct)
+    {
+        var res = await node.ExecuteCommandAsync(new ProcessSpec
+        {
+            Executable = "df",
+            Arguments = ["-i", "/"]
+        }, ct).ConfigureAwait(false);
+
+        var lines = res.StandardOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        if (lines.Length >= 2)
+        {
+            var parts = lines[1].Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length >= 5)
+            {
+                var percentStr = parts[4].TrimEnd('%');
+                if (int.TryParse(percentStr, CultureInfo.InvariantCulture, out var percent))
+                {
+                    if (percent > 90)
+                    {
+                        return new PreflightCheckResult("Inodes (/)", false, $"Inodes usage is high: {percent}% used.");
+                    }
+                    return new PreflightCheckResult("Inodes (/)", true, $"Inodes usage: {percent}%.");
+                }
+            }
+        }
+
+        return new PreflightCheckResult("Inodes (/)", true, "Inodes probe succeeded.");
+    }
+}
+```
+
+## File: src/Starry.Infrastructure/Diagnostics/PreflightCheckResult.cs
+
+**Lines**: 7 | **Size**: 176 B | **Language**: csharp
+
+```csharp
+namespace Starry.Infrastructure.Diagnostics;
+
+public sealed record PreflightCheckResult(
+    string CheckName,
+    bool Passed,
+    string Details,
+    bool WasFixed = false);
 ```
 
 ## File: src/Starry.Infrastructure/Dns/CloudflareDnsProvider.cs
@@ -13696,6 +15015,311 @@ public sealed class Localizer : ILocalizer
         }
 
         return CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
+    }
+}
+```
+
+## File: src/Starry.Infrastructure/Network/AllocatedPortInfo.cs
+
+**Lines**: 8 | **Size**: 176 B | **Language**: csharp
+
+```csharp
+namespace Starry.Infrastructure.Network;
+
+public sealed record AllocatedPortInfo(
+    string RuleName,
+    string From,
+    string To,
+    string Protocol,
+    string Family);
+```
+
+## File: src/Starry.Infrastructure/Network/DomainEndpointAllocator.cs
+
+**Lines**: 119 | **Size**: 4.0 KB | **Language**: csharp
+
+```csharp
+using System.Globalization;
+using System.Security.Cryptography;
+using System.Text.Json.Nodes;
+using Starry.Core.Configuration;
+
+namespace Starry.Infrastructure.Network;
+
+/// <summary>
+/// Allocates external ports and domain endpoints supporting random port generation,
+/// explicit or random IPv4/IPv6 allocation, and protocol routing (http://, sni://, tcp://, udp://).
+/// </summary>
+public static class DomainEndpointAllocator
+{
+    public static int AllocateRandomPort(HashSet<int>? existingPorts = null)
+    {
+        var used = existingPorts ?? [];
+        for (var attempt = 0; attempt < 500; attempt++)
+        {
+            var candidate = RandomNumberGenerator.GetInt32(10000, 60000);
+            if (!used.Contains(candidate))
+            {
+                return candidate;
+            }
+        }
+        return RandomNumberGenerator.GetInt32(10000, 60000);
+    }
+
+    public static IReadOnlyList<AllocatedPortInfo> ListPorts(ConfigTree tree)
+    {
+        ArgumentNullException.ThrowIfNull(tree);
+        var list = new List<AllocatedPortInfo>();
+
+        if (tree.Root.TryGetPropertyValue("ports", out var portsNode) && portsNode is JsonObject portsObj)
+        {
+            foreach (var (ruleName, ruleVal) in portsObj)
+            {
+                if (ruleVal is JsonObject rObj)
+                {
+                    var from = rObj["from"]?.ToString() ?? string.Empty;
+                    var to = rObj["to"]?.ToString() ?? string.Empty;
+                    var proto = rObj["proto"]?.ToString() ?? "tcp";
+                    var family = rObj["family"]?.ToString() ?? (from.Contains("ipv6", StringComparison.OrdinalIgnoreCase) ? "ipv6" : "ipv4");
+
+                    list.Add(new AllocatedPortInfo(ruleName, from, to, proto, family));
+                }
+            }
+        }
+
+        return list;
+    }
+
+    public static AllocatedPortInfo ExposeService(
+        ConfigTree tree,
+        string ruleName,
+        string targetService,
+        int targetPort,
+        string family = "both",
+        int? requestedPort = null,
+        string proto = "tcp")
+    {
+        ArgumentNullException.ThrowIfNull(tree);
+        ArgumentException.ThrowIfNullOrWhiteSpace(ruleName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(targetService);
+        ArgumentNullException.ThrowIfNull(family);
+        ArgumentNullException.ThrowIfNull(proto);
+
+        if (tree.Root["ports"] is not JsonObject portsObj)
+        {
+            portsObj = new JsonObject();
+            tree.Root["ports"] = portsObj;
+        }
+
+        var usedPorts = ExtractUsedPorts(portsObj);
+        var hostPort = requestedPort is > 0 ? requestedPort.Value : AllocateRandomPort(usedPorts);
+
+        string fromExpr;
+        if (string.Equals(family, "ipv6", StringComparison.OrdinalIgnoreCase))
+        {
+            fromExpr = $"[::]:{hostPort}";
+        }
+        else if (string.Equals(family, "ipv4", StringComparison.OrdinalIgnoreCase))
+        {
+            fromExpr = $"0.0.0.0:{hostPort}";
+        }
+        else
+        {
+            fromExpr = $":{hostPort}";
+        }
+
+        var ruleObj = new JsonObject
+        {
+            ["from"] = fromExpr,
+            ["to"] = $"{targetService}:{targetPort}",
+            ["proto"] = proto.ToUpperInvariant(),
+            ["family"] = family.ToUpperInvariant()
+        };
+
+        portsObj[ruleName] = ruleObj;
+        return new AllocatedPortInfo(ruleName, fromExpr, $"{targetService}:{targetPort}", proto, family);
+    }
+
+    private static HashSet<int> ExtractUsedPorts(JsonObject portsObj)
+    {
+        var used = new HashSet<int>();
+        foreach (var (_, val) in portsObj)
+        {
+            if (val is JsonObject obj && obj.TryGetPropertyValue("from", out var fromVal) && fromVal != null)
+            {
+                var fromStr = fromVal.ToString();
+                var colon = fromStr.LastIndexOf(':');
+                if (colon >= 0 && int.TryParse(fromStr[(colon + 1)..], CultureInfo.InvariantCulture, out var p))
+                {
+                    used.Add(p);
+                }
+            }
+        }
+        return used;
+    }
+}
+```
+
+## File: src/Starry.Infrastructure/Network/DualStackPortRelay.cs
+
+**Lines**: 157 | **Size**: 4.7 KB | **Language**: csharp
+
+```csharp
+using System.Net;
+using System.Net.Sockets;
+
+namespace Starry.Infrastructure.Network;
+
+/// <summary>
+/// Asynchronous user-space Dual-Stack TCP/UDP socket relay that bridges
+/// incoming IPv4 requests into IPv6 mesh containers (e.g. fd67:b00b::/32).
+/// </summary>
+public sealed class DualStackPortRelay : IAsyncDisposable
+{
+    private readonly IPAddress _bindIpv4;
+    private readonly int _hostPort;
+    private readonly IPAddress _targetIpv6;
+    private readonly int _targetPort;
+    private readonly string _protocol;
+    private readonly CancellationTokenSource _cts = new();
+    private Task? _relayTask;
+    private TcpListener? _tcpListener;
+    private UdpClient? _udpClient;
+
+    public DualStackPortRelay(
+        string bindIpv4,
+        int hostPort,
+        string targetIpv6,
+        int targetPort,
+        string protocol = "tcp")
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(bindIpv4);
+        ArgumentException.ThrowIfNullOrWhiteSpace(targetIpv6);
+        ArgumentNullException.ThrowIfNull(protocol);
+
+        _bindIpv4 = IPAddress.Parse(bindIpv4);
+        _hostPort = hostPort;
+        _targetIpv6 = IPAddress.Parse(targetIpv6);
+        _targetPort = targetPort;
+        _protocol = protocol.ToUpperInvariant();
+    }
+
+    public void Start()
+    {
+        if (_protocol is "TCP" or "BOTH")
+        {
+            _tcpListener = new TcpListener(_bindIpv4, _hostPort);
+            _tcpListener.Start();
+            _relayTask = RunTcpRelayLoopAsync(_cts.Token);
+        }
+
+        if (_protocol is "UDP" or "BOTH")
+        {
+            _udpClient = new UdpClient(new IPEndPoint(_bindIpv4, _hostPort));
+            _relayTask = RunUdpRelayLoopAsync(_cts.Token);
+        }
+    }
+
+    private async Task RunTcpRelayLoopAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested && _tcpListener != null)
+        {
+            try
+            {
+                var clientSocket = await _tcpListener.AcceptTcpClientAsync(ct).ConfigureAwait(false);
+                _ = HandleTcpClientAsync(clientSocket, ct);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            catch (SocketException)
+            {
+                break;
+            }
+        }
+    }
+
+    private async Task HandleTcpClientAsync(TcpClient client, CancellationToken ct)
+    {
+        using (client)
+        using (var target = new TcpClient(AddressFamily.InterNetworkV6))
+        {
+            try
+            {
+                await target.ConnectAsync(_targetIpv6, _targetPort, ct).ConfigureAwait(false);
+                var clientStream = client.GetStream();
+                var targetStream = target.GetStream();
+
+                await Task.WhenAny(
+                    clientStream.CopyToAsync(targetStream, ct),
+                    targetStream.CopyToAsync(clientStream, ct)).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Connection terminated or refused
+            }
+        }
+    }
+
+    private async Task RunUdpRelayLoopAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested && _udpClient != null)
+        {
+            try
+            {
+                var result = await _udpClient.ReceiveAsync(ct).ConfigureAwait(false);
+                _ = HandleUdpDatagramAsync(result, ct);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            catch (SocketException)
+            {
+                break;
+            }
+        }
+    }
+
+    private async Task HandleUdpDatagramAsync(UdpReceiveResult incoming, CancellationToken ct)
+    {
+        using var upstream = new UdpClient(AddressFamily.InterNetworkV6);
+        try
+        {
+            await upstream.SendAsync(incoming.Buffer, new IPEndPoint(_targetIpv6, _targetPort), ct).ConfigureAwait(false);
+            var reply = await upstream.ReceiveAsync(ct).ConfigureAwait(false);
+            if (_udpClient != null)
+            {
+                await _udpClient.SendAsync(reply.Buffer, incoming.RemoteEndPoint, ct).ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Transient UDP drop
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await _cts.CancelAsync().ConfigureAwait(false);
+
+        _tcpListener?.Dispose();
+        _udpClient?.Dispose();
+
+        if (_relayTask != null)
+        {
+            try
+            {
+                await _relayTask.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected on stop
+            }
+        }
+
+        _cts.Dispose();
     }
 }
 ```
@@ -14608,7 +16232,7 @@ public sealed record NodeInterfaceInfo(
 
 ## File: src/Starry.Infrastructure/Network/NodeNetworkInspector.cs
 
-**Lines**: 183 | **Size**: 6.6 KB | **Language**: csharp
+**Lines**: 200 | **Size**: 7.2 KB | **Language**: csharp
 
 ```csharp
 using System.Net;
@@ -14642,6 +16266,11 @@ public static class NodeNetworkInspector
         }, ct).ConfigureAwait(false);
 
         var (extIpv4, extIpv6) = await QueryExternalIpsAsync(node, ct).ConfigureAwait(false);
+
+        if (verifyReachability)
+        {
+            await VerifyReachabilityAsync(node, ct).ConfigureAwait(false);
+        }
 
         if (ipResult.IsSuccess && !string.IsNullOrWhiteSpace(ipResult.StandardOutput))
         {
@@ -14704,6 +16333,18 @@ public static class NodeNetworkInspector
         var extIpv6 = extIpv6Result.IsSuccess ? extIpv6Result.StandardOutput.Trim() : null;
 
         return (extIpv4, extIpv6);
+    }
+
+    private static async Task<bool> VerifyReachabilityAsync(INodeConnection node, CancellationToken ct)
+    {
+        var pingSpec = new ProcessSpec
+        {
+            Executable = "sh",
+            Arguments = ["-c", "ping -c 1 -W 2 1.1.1.1 2>/dev/null || curl -s --max-time 2 https://1.1.1.1 2>/dev/null || true"],
+            Timeout = TimeSpan.FromSeconds(5)
+        };
+        var res = await node.ExecuteCommandAsync(pingSpec, ct).ConfigureAwait(false);
+        return res.IsSuccess;
     }
 
     private static NodeInterfaceInfo? ParseInterfaceInfo(JsonObject ifaceObj, string? extIpv4, string? extIpv6)
@@ -15344,7 +16985,7 @@ public sealed class NodeOperationsService
 
 ## File: src/Starry.Infrastructure/Nodes/SshNodeConnection.cs
 
-**Lines**: 316 | **Size**: 9.6 KB | **Language**: csharp
+**Lines**: 415 | **Size**: 12.9 KB | **Language**: csharp
 
 ```csharp
 using System.Diagnostics;
@@ -15393,7 +17034,7 @@ public sealed class SshNodeConnection : INodeConnection
         }
 
         Directory.CreateDirectory(_options.ControlPathDir);
-        _controlSocketPath = Path.Combine(_options.ControlPathDir, $"starry-ssh-{_options.User}@{_options.Host}:{_options.Port}-{Guid.NewGuid():N}");
+        _controlSocketPath = Path.Combine(_options.ControlPathDir, $"starry-ssh-{_options.User}@{_options.Host}_{_options.Port}-{Guid.NewGuid():N}");
 
         if (!string.IsNullOrWhiteSpace(_options.PrivateKeyContent))
         {
@@ -15476,6 +17117,17 @@ public sealed class SshNodeConnection : INodeConnection
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(socketPath);
 
+        if (OperatingSystem.IsWindows())
+        {
+            return await CreateWindowsTcpForwardedHttpClientAsync(socketPath, ct).ConfigureAwait(false);
+        }
+
+        return await CreateUnixDomainSocketHttpClientAsync(socketPath, ct).ConfigureAwait(false);
+    }
+
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope", Justification = "SocketsHttpHandler ownership transferred to HttpClient")]
+    private async Task<HttpClient> CreateUnixDomainSocketHttpClientAsync(string socketPath, CancellationToken ct)
+    {
         var localSocketPath = Path.Combine(_options.ControlPathDir, $".sock-{Guid.NewGuid():N}.sock");
         _tempSocketPaths.Add(localSocketPath);
 
@@ -15487,22 +17139,8 @@ public sealed class SshNodeConnection : INodeConnection
             $"{_options.User}@{_options.Host}"
         };
 
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = SshExecutablePath,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-        foreach (var arg in tunnelArgs)
-        {
-            startInfo.ArgumentList.Add(arg);
-        }
+        var process = StartTunnelProcess(tunnelArgs);
 
-        var process = new Process { StartInfo = startInfo };
-        process.Start();
-        _tunnelProcesses.Add(process);
-
-        // Poll up to 10 seconds for the forwarded Unix domain socket to appear
         var attempts = 0;
         const int maxAttempts = 200; // 200 * 50ms = 10 seconds
         while (!File.Exists(localSocketPath) && attempts < maxAttempts)
@@ -15527,26 +17165,123 @@ public sealed class SshNodeConnection : INodeConnection
             }
         };
 
-        var client = new HttpClient(handler, disposeHandler: true)
+        return new HttpClient(handler, disposeHandler: true)
         {
             BaseAddress = DefaultRemoteSocketUri
         };
+    }
 
-        return client;
+    private async Task<HttpClient> CreateWindowsTcpForwardedHttpClientAsync(string remoteSocketPath, CancellationToken ct)
+    {
+        int freePort;
+        using (var listener = new TcpListener(System.Net.IPAddress.Loopback, 0))
+        {
+            listener.Start();
+            freePort = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+            listener.Stop();
+        }
+
+        var tunnelArgs = new List<string>(BuildSshArguments())
+        {
+            "-N",
+            "-L",
+            $"127.0.0.1:{freePort}:{remoteSocketPath}",
+            $"{_options.User}@{_options.Host}"
+        };
+
+        var process = StartTunnelProcess(tunnelArgs);
+        await PollTcpPortReadyAsync(process, freePort, ct).ConfigureAwait(false);
+
+        return new HttpClient
+        {
+            BaseAddress = new Uri($"http://127.0.0.1:{freePort}/")
+        };
+    }
+
+    private Process StartTunnelProcess(IEnumerable<string> tunnelArgs)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = SshExecutablePath,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        foreach (var arg in tunnelArgs)
+        {
+            startInfo.ArgumentList.Add(arg);
+        }
+
+        var process = new Process { StartInfo = startInfo };
+        process.Start();
+        _tunnelProcesses.Add(process);
+        return process;
+    }
+
+    private static async Task PollTcpPortReadyAsync(Process process, int freePort, CancellationToken ct)
+    {
+        var attempts = 0;
+        const int maxAttempts = 200;
+        var connected = false;
+
+        while (!connected && attempts < maxAttempts)
+        {
+            if (process.HasExited)
+            {
+                throw new InvalidOperationException($"SSH TCP-to-socket tunnel exited prematurely with code {process.ExitCode}.");
+            }
+
+            try
+            {
+                using var tcp = new TcpClient();
+                var connectTask = tcp.ConnectAsync("127.0.0.1", freePort);
+                var completed = await Task.WhenAny(connectTask, Task.Delay(50, ct)).ConfigureAwait(false);
+                if (completed == connectTask && tcp.Connected)
+                {
+                    connected = true;
+                    break;
+                }
+            }
+            catch (SocketException)
+            {
+                // Port not ready yet
+            }
+
+            await Task.Delay(50, ct).ConfigureAwait(false);
+            attempts++;
+        }
+
+        if (!connected)
+        {
+            KillTunnelSafe(process);
+            throw new TimeoutException($"SSH TCP forwarding timed out waiting for 127.0.0.1:{freePort}.");
+        }
+    }
+
+    private static void KillTunnelSafe(Process process)
+    {
+        try
+        {
+            process.Kill(entireProcessTree: true);
+        }
+        catch (InvalidOperationException)
+        {
+            // Ignore if terminated
+        }
     }
 
     public IReadOnlyList<string> BuildSshArguments()
     {
+        var knownHostsPath = Path.Combine(_options.ControlPathDir, "known_hosts");
         var args = new List<string>
         {
             "-p", _options.Port.ToString(CultureInfo.InvariantCulture),
             "-o", "BatchMode=yes",
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "StrictHostKeyChecking=accept-new",
+            "-o", $"UserKnownHostsFile={knownHostsPath}",
             "-o", "IdentitiesOnly=yes"
         };
 
-        if (!string.IsNullOrEmpty(_controlSocketPath))
+        if (!OperatingSystem.IsWindows() && !string.IsNullOrEmpty(_controlSocketPath))
         {
             args.Add("-o");
             args.Add("ControlMaster=auto");
@@ -15654,6 +17389,11 @@ public sealed class SshNodeConnection : INodeConnection
         {
             try
             {
+                var len = new FileInfo(_tempKeyPath).Length;
+                if (len > 0)
+                {
+                    File.WriteAllBytes(_tempKeyPath, new byte[len]);
+                }
                 File.Delete(_tempKeyPath);
             }
             catch (IOException)
@@ -15686,7 +17426,7 @@ public sealed record SshNodeOptions
 
 ## File: src/Starry.Infrastructure/Orchestration/ClusterOrchestrator.cs
 
-**Lines**: 1658 | **Size**: 61.9 KB | **Language**: csharp
+**Lines**: 1761 | **Size**: 66.3 KB | **Language**: csharp
 
 ```csharp
 using System.Globalization;
@@ -15694,12 +17434,14 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using Starry.Core.Backups;
 using Starry.Core.Configuration;
 using Starry.Core.Containers;
 using Starry.Core.Dns;
 using Starry.Core.Nodes;
 using Starry.Core.Processes;
 using Starry.Core.Security;
+using Starry.Infrastructure.Backups;
 using Starry.Infrastructure.Containers;
 using Starry.Infrastructure.Dns;
 using Starry.Infrastructure.Network;
@@ -15752,7 +17494,7 @@ public sealed partial class ClusterOrchestrator
         _defaultRuntime = defaultRuntime ?? new DockerRuntime();
         _dnsProvider = dnsProvider;
         _processRunner = processRunner ?? new ProcessRunner();
-        _masterKey = masterKey ?? ResolveMasterKeyFromEnvironment();
+        _masterKey = masterKey ?? MasterKeyResolver.ResolveKey();
     }
 
     /// <summary>
@@ -15803,33 +17545,7 @@ public sealed partial class ClusterOrchestrator
         ArgumentException.ThrowIfNullOrWhiteSpace(nodeName);
         ArgumentNullException.ThrowIfNull(nodeObj);
 
-        var host = nodeObj["host"]?.ToString() ?? "localhost";
-        var port = nodeObj.TryGetPropertyValue("port", out var pVal) &&
-                   int.TryParse(pVal?.ToString(), CultureInfo.InvariantCulture, out var p)
-            ? p
-            : 22;
-        var user = nodeObj["user"]?.ToString() ?? "root";
-
-        if (nodeObj.TryGetPropertyValue("ssh", out var sshVal) && sshVal != null)
-        {
-            var sshStr = sshVal.ToString();
-            var (parsedUser, parsedHost, parsedPort) = ParseSshString(sshStr);
-            if (!string.IsNullOrEmpty(parsedHost))
-            {
-                host = parsedHost;
-                user = parsedUser;
-                port = parsedPort;
-            }
-        }
-        var sshKey = nodeObj["ssh_key"]?.ToString();
-        var jumpHost = nodeObj["jump_host"]?.ToString();
-        var isLocalFlag = bool.TryParse(nodeObj["is_local"]?.ToString(), out var ilb) && ilb;
-
-        var isLocalHost = string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase) ||
-                          string.Equals(host, DefaultLocalIp, StringComparison.Ordinal) ||
-                          string.Equals(host, "::1", StringComparison.Ordinal);
-
-        var isLocal = isLocalFlag || (isLocalHost && string.IsNullOrEmpty(sshKey) && string.IsNullOrEmpty(jumpHost));
+        var (host, port, user, sshKey, jumpHost, isLocal) = ResolveNodeEndpointDetails(nodeName, nodeObj);
 
         if (isLocal)
         {
@@ -15857,6 +17573,45 @@ public sealed partial class ClusterOrchestrator
         var ssh = new SshNodeConnection(sshOptions, _processRunner);
         await ssh.InitializeAsync(ct).ConfigureAwait(false);
         return ssh;
+    }
+
+    private (string Host, int Port, string User, string? SshKey, string? JumpHost, bool IsLocal) ResolveNodeEndpointDetails(string nodeName, JsonObject nodeObj)
+    {
+        var host = nodeObj["host"]?.ToString() ?? "localhost";
+        host = DecryptSecretString(host, $"nodes.{nodeName}.host");
+
+        var port = nodeObj.TryGetPropertyValue("port", out var pVal) &&
+                   int.TryParse(pVal?.ToString(), CultureInfo.InvariantCulture, out var p)
+            ? p
+            : 22;
+        var user = nodeObj["user"]?.ToString() ?? "root";
+
+        if (nodeObj.TryGetPropertyValue("ssh", out var sshVal) && sshVal != null)
+        {
+            var sshStr = DecryptSecretString(sshVal.ToString(), $"nodes.{nodeName}.ssh");
+            var (parsedUser, parsedHost, parsedPort) = ParseSshString(sshStr);
+            if (!string.IsNullOrEmpty(parsedHost))
+            {
+                host = parsedHost;
+                user = parsedUser;
+                port = parsedPort;
+            }
+        }
+
+        var sshKey = nodeObj["ssh_key"]?.ToString();
+        var jumpHost = nodeObj["jump_host"]?.ToString();
+        if (!string.IsNullOrEmpty(jumpHost))
+        {
+            jumpHost = DecryptSecretString(jumpHost, $"nodes.{nodeName}.jump_host");
+        }
+
+        var isLocalFlag = bool.TryParse(nodeObj["is_local"]?.ToString(), out var ilb) && ilb;
+        var isLocalHost = string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase) ||
+                          string.Equals(host, DefaultLocalIp, StringComparison.Ordinal) ||
+                          string.Equals(host, "::1", StringComparison.Ordinal);
+
+        var isLocal = isLocalFlag || (isLocalHost && string.IsNullOrEmpty(sshKey) && string.IsNullOrEmpty(jumpHost));
+        return (host, port, user, sshKey, jumpHost, isLocal);
     }
 
     private static (string User, string Host, int Port) ParseSshString(string input)
@@ -15990,7 +17745,7 @@ public sealed partial class ClusterOrchestrator
         switch (action.ActionType)
         {
             case PlanActionType.CreateNode:
-                await ExecuteCreateNodeActionAsync(action, nodes, logger, ct).ConfigureAwait(false);
+                await ExecuteCreateNodeActionAsync(action, config, nodes, logger, ct).ConfigureAwait(false);
                 break;
 
             case PlanActionType.ConfigureWireGuardMesh:
@@ -16020,6 +17775,7 @@ public sealed partial class ClusterOrchestrator
 
     private async Task ExecuteCreateNodeActionAsync(
         PlanAction action,
+        ConfigTree config,
         IReadOnlyList<INodeConnection> nodes,
         Action<string>? logger,
         CancellationToken ct)
@@ -16031,7 +17787,25 @@ public sealed partial class ClusterOrchestrator
         var packageManager = _packageManagerFactory.ResolveForNode(node);
         logger?.Invoke($"Installing baseline system packages on node '{node.NodeName}' using {packageManager.GetType().Name}...");
 
-        await packageManager.EnsurePackagesInstalledAsync(node, BaselineLogicalPackages, ct).ConfigureAwait(false);
+        var nodeObj = config.Root["nodes"]?[node.NodeName] as JsonObject;
+        var engine = nodeObj?["engine"]?.ToString() ?? "docker";
+
+        var packagesToInstall = new List<string>(BaselineLogicalPackages)
+        {
+            engine
+        };
+
+        await packageManager.EnsurePackagesInstalledAsync(node, packagesToInstall, ct).ConfigureAwait(false);
+
+        var startCmd = string.Equals(engine, "podman", StringComparison.OrdinalIgnoreCase)
+            ? "systemctl enable --now podman.socket || true"
+            : "systemctl enable --now docker || service docker start || true";
+
+        await node.ExecuteCommandAsync(new ProcessSpec
+        {
+            Executable = "sh",
+            Arguments = ["-c", startCmd]
+        }, ct).ConfigureAwait(false);
     }
 
     private async Task ExecuteConfigureWireGuardMeshActionAsync(
@@ -16126,8 +17900,97 @@ public sealed partial class ClusterOrchestrator
         var targetNodeObj = config.Root["nodes"]?[targetNode.NodeName] as JsonObject;
         var runtime = ResolveRuntimeForNode(targetNodeObj);
 
+        await EnsureServiceVolumesPreparedAsync(targetNode, spec, config, logger, ct).ConfigureAwait(false);
+
         logger?.Invoke($"Deploying container service '{spec.Name}' [{spec.Image}] on node '{targetNode.NodeName}' (priority: {spec.Priority})...");
         await runtime.DeployContainerAsync(targetNode, spec, ct).ConfigureAwait(false);
+    }
+
+    private async Task EnsureServiceVolumesPreparedAsync(
+        INodeConnection node,
+        ServiceSpec spec,
+        ConfigTree config,
+        Action<string>? logger,
+        CancellationToken ct)
+    {
+        var backupProvider = ResolveBackupStorageProvider(config);
+        foreach (var vol in spec.Volumes)
+        {
+            var colon = vol.IndexOf(':', StringComparison.Ordinal);
+            var volNameOrPath = colon > 0 ? vol[..colon] : vol;
+            if (volNameOrPath.StartsWith('/') || volNameOrPath.StartsWith('.'))
+            {
+                await node.ExecuteCommandAsync(new ProcessSpec
+                {
+                    Executable = "mkdir",
+                    Arguments = ["-p", volNameOrPath]
+                }, ct).ConfigureAwait(false);
+                continue;
+            }
+
+            var checkRes = await node.ExecuteCommandAsync(new ProcessSpec
+            {
+                Executable = "sh",
+                Arguments = ["-c", $"test -d /var/lib/docker/volumes/{volNameOrPath}/_data || test -d /var/lib/containers/storage/volumes/{volNameOrPath}/_data"]
+            }, ct).ConfigureAwait(false);
+
+            if (checkRes.IsSuccess)
+            {
+                continue;
+            }
+
+            var targetVolumePath = $"/var/lib/docker/volumes/{volNameOrPath}/_data";
+            if (backupProvider != null && await backupProvider.HasBackupAsync(node, volNameOrPath, ct).ConfigureAwait(false))
+            {
+                logger?.Invoke($"Restoring S3 backup for volume '{volNameOrPath}' to node '{node.NodeName}'...");
+                await backupProvider.StreamRestoreAsync(node, volNameOrPath, targetVolumePath, ct).ConfigureAwait(false);
+            }
+            else
+            {
+                await node.ExecuteCommandAsync(new ProcessSpec
+                {
+                    Executable = "mkdir",
+                    Arguments = ["-p", targetVolumePath]
+                }, ct).ConfigureAwait(false);
+            }
+        }
+    }
+
+    private IBackupStorageProvider? ResolveBackupStorageProvider(ConfigTree config)
+    {
+        if (config.Root.TryGetPropertyValue("s3", out var s3Node) && s3Node is JsonObject s3Obj)
+        {
+            var bucket = s3Obj["bucket"]?.ToString() ?? "starry-backups";
+            var endpoint = s3Obj["endpoint"]?.ToString();
+            var region = s3Obj["region"]?.ToString() ?? "us-east-1";
+            var accessKey = s3Obj["access_key"]?.ToString();
+            var secretKey = s3Obj["secret_key"]?.ToString();
+            var prefix = s3Obj["prefix"]?.ToString();
+
+            if (!string.IsNullOrEmpty(accessKey)) accessKey = DecryptSecretString(accessKey, "s3.access_key");
+            if (!string.IsNullOrEmpty(secretKey)) secretKey = DecryptSecretString(secretKey, "s3.secret_key");
+
+            return new S3BackupStorageProvider(new S3StorageOptions
+            {
+                Bucket = bucket,
+                Endpoint = endpoint,
+                Region = region,
+                AccessKey = accessKey,
+                SecretKey = secretKey,
+                Prefix = prefix
+            });
+        }
+
+        if (config.Root.TryGetPropertyValue("backups", out var bNode) && bNode is JsonObject bObj)
+        {
+            var dest = bObj["remote"]?.ToString() ?? bObj["destination"]?.ToString();
+            if (!string.IsNullOrEmpty(dest))
+            {
+                return new RcloneBackupStorageProvider(dest);
+            }
+        }
+
+        return null;
     }
 
     private async Task ExecuteMigrateServiceBlueGreenActionAsync(
@@ -16926,7 +18789,8 @@ public sealed partial class ClusterOrchestrator
             ct.ThrowIfCancellationRequested();
             var nodeObj = config.Root["nodes"]?[node.NodeName] as JsonObject;
 
-            var vpnIp = nodeObj?["vpn_ip"]?.ToString() ?? DefaultWireGuardIp;
+            var vpnIpRaw = nodeObj?["vpn_ip"]?.ToString() ?? DefaultWireGuardIp;
+            var vpnIp = DecryptSecretString(vpnIpRaw, $"nodes.{node.NodeName}.vpn_ip");
             var isPublic = bool.TryParse(nodeObj?["is_public"]?.ToString(), out var ipb) && ipb;
 
             var (privKey, pubKey) = await ResolveWireGuardKeysForNodeAsync(node, nodeObj, ct).ConfigureAwait(false);
@@ -17007,8 +18871,9 @@ public sealed partial class ClusterOrchestrator
     {
         var result = await node.ExecuteCommandAsync(new ProcessSpec
         {
-            Executable = "sh",
-            Arguments = ["-c", $"echo '{privateKey}' | wg pubkey 2>/dev/null || true"]
+            Executable = "wg",
+            Arguments = ["pubkey"],
+            StandardInputBytes = Encoding.UTF8.GetBytes(privateKey + "\n")
         }, ct).ConfigureAwait(false);
 
         var pubKey = result.StandardOutput.Trim();
@@ -17324,28 +19189,6 @@ public sealed partial class ClusterOrchestrator
 
         return value;
     }
-
-    private static byte[]? ResolveMasterKeyFromEnvironment()
-    {
-        var envVal = Environment.GetEnvironmentVariable("STARRY_MASTER_KEY");
-        if (!string.IsNullOrWhiteSpace(envVal))
-        {
-            try
-            {
-                return CryptoService.ParseMasterKey(envVal);
-            }
-            catch (FormatException)
-            {
-                // Invalid base64 or key format in environment variable; return null
-            }
-            catch (ArgumentException)
-            {
-                // Invalid key length; return null
-            }
-        }
-
-        return null;
-    }
 }
 ```
 
@@ -17611,7 +19454,7 @@ public static class DomainRoutingService
 
 ## File: src/Starry.Infrastructure/Orchestration/HostAdoptionService.cs
 
-**Lines**: 970 | **Size**: 32.5 KB | **Language**: csharp
+**Lines**: 963 | **Size**: 32.3 KB | **Language**: csharp
 
 ```csharp
 #pragma warning disable MA0048 // File name must match type name
@@ -18533,17 +20376,10 @@ public sealed class HostAdoptionService : IHostAdoptionService
             return key;
         }
 
-        var envKey = Environment.GetEnvironmentVariable("STARRY_MASTER_KEY");
-        if (!string.IsNullOrWhiteSpace(envKey))
+        var resolved = MasterKeyResolver.ResolveKey(null, options.OutDir);
+        if (resolved != null)
         {
-            try
-            {
-                return CryptoService.ParseMasterKey(envKey);
-            }
-            catch (FormatException)
-            {
-                // Fallback to generating a fresh key
-            }
+            return resolved;
         }
 
         return CryptoService.ParseMasterKey(CryptoService.GenerateMasterKeyBase64());
@@ -18830,7 +20666,7 @@ public sealed record ResolvedDomainRoute(
 
 ## File: src/Starry.Infrastructure/Packaging/ApkPackageManager.cs
 
-**Lines**: 86 | **Size**: 2.6 KB | **Language**: csharp
+**Lines**: 88 | **Size**: 2.7 KB | **Language**: csharp
 
 ```csharp
 using Starry.Core.Nodes;
@@ -18915,6 +20751,8 @@ public sealed class ApkPackageManager : IOsPackageManager
             "curl" => "curl",
             "rsync" => "rsync",
             "zstd" => "zstd",
+            "docker" => "docker",
+            "podman" => "podman",
             _ => logicalPackage
         };
     }
@@ -18923,7 +20761,7 @@ public sealed class ApkPackageManager : IOsPackageManager
 
 ## File: src/Starry.Infrastructure/Packaging/AptPackageManager.cs
 
-**Lines**: 108 | **Size**: 3.5 KB | **Language**: csharp
+**Lines**: 110 | **Size**: 3.6 KB | **Language**: csharp
 
 ```csharp
 using Starry.Core.Nodes;
@@ -19030,6 +20868,8 @@ public sealed class AptPackageManager : IOsPackageManager
             "curl" => "curl",
             "rsync" => "rsync",
             "zstd" => "zstd",
+            "docker" => "docker.io",
+            "podman" => "podman",
             _ => logicalPackage
         };
     }
@@ -19038,7 +20878,7 @@ public sealed class AptPackageManager : IOsPackageManager
 
 ## File: src/Starry.Infrastructure/Packaging/DnfPackageManager.cs
 
-**Lines**: 91 | **Size**: 2.9 KB | **Language**: csharp
+**Lines**: 93 | **Size**: 2.9 KB | **Language**: csharp
 
 ```csharp
 using Starry.Core.Nodes;
@@ -19128,6 +20968,8 @@ public sealed class DnfPackageManager : IOsPackageManager
             "curl" => "curl",
             "rsync" => "rsync",
             "zstd" => "zstd",
+            "docker" => "docker",
+            "podman" => "podman",
             _ => logicalPackage
         };
     }
@@ -19185,7 +21027,7 @@ public sealed class PackageManagerFactory
 
 ## File: src/Starry.Infrastructure/Packaging/PacmanPackageManager.cs
 
-**Lines**: 86 | **Size**: 2.7 KB | **Language**: csharp
+**Lines**: 88 | **Size**: 2.8 KB | **Language**: csharp
 
 ```csharp
 using Starry.Core.Nodes;
@@ -19270,6 +21112,8 @@ public sealed class PacmanPackageManager : IOsPackageManager
             "curl" => "curl",
             "rsync" => "rsync",
             "zstd" => "zstd",
+            "docker" => "docker",
+            "podman" => "podman",
             _ => logicalPackage
         };
     }
@@ -19649,9 +21493,182 @@ public sealed class CryptoService : ICryptoService
 }
 ```
 
+## File: src/Starry.Infrastructure/Security/MasterKeyResolver.cs
+
+**Lines**: 73 | **Size**: 1.9 KB | **Language**: csharp
+
+```csharp
+namespace Starry.Infrastructure.Security;
+
+/// <summary>
+/// Resolves the 32-byte master encryption key in priority order:
+/// 1. Explicit CLI argument / flag.
+/// 2. Environment variable STARRY_MASTER_KEY.
+/// 3. Local file &lt;configDir&gt;/.starry/master.key or ./.starry/master.key.
+/// </summary>
+public static class MasterKeyResolver
+{
+    public static byte[]? ResolveKey(string? explicitKeyOrFlag = null, string? configDir = null)
+    {
+        if (!string.IsNullOrWhiteSpace(explicitKeyOrFlag))
+        {
+            var key = TryParse(explicitKeyOrFlag);
+            if (key != null)
+            {
+                return key;
+            }
+        }
+
+        var envVal = Environment.GetEnvironmentVariable("STARRY_MASTER_KEY");
+        if (!string.IsNullOrWhiteSpace(envVal))
+        {
+            var key = TryParse(envVal);
+            if (key != null)
+            {
+                return key;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(configDir))
+        {
+            var candidate1 = Path.Combine(configDir, ".starry", "master.key");
+            if (File.Exists(candidate1))
+            {
+                var key = TryParse(File.ReadAllText(candidate1).Trim());
+                if (key != null)
+                {
+                    return key;
+                }
+            }
+        }
+
+        var candidate2 = Path.Combine(Directory.GetCurrentDirectory(), ".starry", "master.key");
+        if (File.Exists(candidate2))
+        {
+            var key = TryParse(File.ReadAllText(candidate2).Trim());
+            if (key != null)
+            {
+                return key;
+            }
+        }
+
+        return null;
+    }
+
+    private static byte[]? TryParse(string candidate)
+    {
+        try
+        {
+            return CryptoService.ParseMasterKey(candidate);
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
+    }
+}
+```
+
+## File: src/Starry.Infrastructure/Security/PortRandomizerService.cs
+
+**Lines**: 76 | **Size**: 3.2 KB | **Language**: csharp
+
+```csharp
+using System.Globalization;
+using System.Security.Cryptography;
+using Starry.Core.Nodes;
+using Starry.Core.Processes;
+
+namespace Starry.Infrastructure.Security;
+
+/// <summary>
+/// Provides lockout-safe SSH port migration by opening the new port alongside the old port,
+/// verifying reachability, and removing the old port only after verification succeeds.
+/// </summary>
+public static class PortRandomizerService
+{
+    public static async Task<int> MigrateSshPortSafelyAsync(
+        INodeConnection node,
+        int currentPort,
+        int? requestedNewPort = null,
+        Action<string>? logger = null,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(node);
+
+        var newPort = requestedNewPort is > 0 ? requestedNewPort.Value : RandomNumberGenerator.GetInt32(10000, 60000);
+        if (newPort == currentPort)
+        {
+            return currentPort;
+        }
+
+        logger?.Invoke($"Opening new SSH port {newPort} alongside {currentPort}...");
+
+        // 1. Add Port newPort to sshd_config.d or sshd_config
+        var openDualSpec = new ProcessSpec
+        {
+            Executable = "sh",
+            Arguments = ["-c", $"echo 'Port {currentPort}' > /etc/ssh/sshd_config.d/starry-ports.conf && echo 'Port {newPort}' >> /etc/ssh/sshd_config.d/starry-ports.conf && (systemctl reload sshd || systemctl reload ssh || service ssh reload || true)"]
+        };
+        await node.ExecuteCommandAsync(openDualSpec, ct).ConfigureAwait(false);
+
+        // 2. Verify new port is listening
+        logger?.Invoke($"Verifying SSH listening on new port {newPort}...");
+        var testSpec = new ProcessSpec
+        {
+            Executable = "sh",
+            Arguments = ["-c", $"ss -lnt | grep ':{newPort} ' || netstat -lnt | grep ':{newPort} '"]
+        };
+        var testResult = await node.ExecuteCommandAsync(testSpec, ct).ConfigureAwait(false);
+
+        if (!testResult.IsSuccess)
+        {
+            logger?.Invoke($"Verification failed for port {newPort}. Rolling back to port {currentPort}...");
+            await RollbackPortAsync(node, currentPort, ct).ConfigureAwait(false);
+            throw new InvalidOperationException($"Lockout prevention: SSH port verification failed on port {newPort}. Rolled back.");
+        }
+
+        // 3. Keep only new port
+        logger?.Invoke($"Locking SSH exclusively to verified port {newPort}...");
+        var lockSpec = new ProcessSpec
+        {
+            Executable = "sh",
+            Arguments = ["-c", $"echo 'Port {newPort}' > /etc/ssh/sshd_config.d/starry-ports.conf && (systemctl reload sshd || systemctl reload ssh || service ssh reload || true)"]
+        };
+        await node.ExecuteCommandAsync(lockSpec, ct).ConfigureAwait(false);
+
+        return newPort;
+    }
+
+    private static async Task RollbackPortAsync(INodeConnection node, int originalPort, CancellationToken ct)
+    {
+        var rollbackSpec = new ProcessSpec
+        {
+            Executable = "sh",
+            Arguments = ["-c", $"echo 'Port {originalPort}' > /etc/ssh/sshd_config.d/starry-ports.conf && (systemctl reload sshd || systemctl reload ssh || service ssh reload || true)"]
+        };
+        await node.ExecuteCommandAsync(rollbackSpec, ct).ConfigureAwait(false);
+    }
+}
+```
+
+## File: src/Starry.Infrastructure/Security/SecretItemInfo.cs
+
+**Lines**: 3 | **Size**: 131 B | **Language**: csharp
+
+```csharp
+namespace Starry.Infrastructure.Security;
+
+public sealed record SecretItemInfo(string Path, bool IsEncrypted, string? SourceFile);
+```
+
 ## File: src/Starry.Infrastructure/Security/SecretManager.cs
 
-**Lines**: 325 | **Size**: 11.1 KB | **Language**: csharp
+**Lines**: 411 | **Size**: 14.2 KB | **Language**: csharp
 
 ```csharp
 using System.Security.Cryptography;
@@ -19705,6 +21722,92 @@ public sealed class SecretManager
         }
 
         return count;
+    }
+
+    public void SetSecret(
+        ConfigTree tree,
+        string canonicalPath,
+        string plainText,
+        byte[] masterKey,
+        string rootPath,
+        VirtualConfigEngine engine)
+    {
+        ArgumentNullException.ThrowIfNull(tree);
+        ArgumentException.ThrowIfNullOrWhiteSpace(canonicalPath);
+        ArgumentNullException.ThrowIfNull(plainText);
+        ArgumentNullException.ThrowIfNull(masterKey);
+        ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
+        ArgumentNullException.ThrowIfNull(engine);
+
+        var envelope = _cryptoService.Encrypt(Encoding.UTF8.GetBytes(plainText), masterKey, canonicalPath);
+        tree.SetNode(canonicalPath, JsonValue.Create(envelope.FormatEncrypted()));
+
+        SaveTreeAtomically(tree, rootPath, engine);
+    }
+
+    public string GetSecret(
+        ConfigTree tree,
+        string canonicalPath,
+        byte[] masterKey)
+    {
+        ArgumentNullException.ThrowIfNull(tree);
+        ArgumentException.ThrowIfNullOrWhiteSpace(canonicalPath);
+        ArgumentNullException.ThrowIfNull(masterKey);
+
+        var node = tree.FindNode(canonicalPath)
+            ?? throw new KeyNotFoundException($"Secret at canonical path '{canonicalPath}' was not found in the configuration tree.");
+
+        var valStr = node.ToString();
+        if (_cryptoService.TryParseEncrypted(valStr, out var envelope) && envelope != null)
+        {
+            var bytes = _cryptoService.Decrypt(envelope, masterKey, canonicalPath);
+            return Encoding.UTF8.GetString(bytes);
+        }
+
+        if (valStr.StartsWith("PLAIN[", StringComparison.Ordinal) && valStr.EndsWith(']'))
+        {
+            return valStr["PLAIN[".Length..^1];
+        }
+
+        return valStr;
+    }
+
+    public IReadOnlyList<SecretItemInfo> ListSecrets(ConfigTree tree)
+    {
+        ArgumentNullException.ThrowIfNull(tree);
+
+        var list = new List<SecretItemInfo>();
+        CollectSecretsRecursive(tree.Root, string.Empty, tree, list);
+        return list;
+    }
+
+    private void CollectSecretsRecursive(JsonNode? current, string currentPath, ConfigTree tree, List<SecretItemInfo> list)
+    {
+        if (current is JsonObject obj)
+        {
+            foreach (var (k, v) in obj)
+            {
+                var childPath = string.IsNullOrEmpty(currentPath) ? k : $"{currentPath}.{k}";
+                CollectSecretsRecursive(v, childPath, tree, list);
+            }
+        }
+        else if (current is JsonArray arr)
+        {
+            for (var i = 0; i < arr.Count; i++)
+            {
+                CollectSecretsRecursive(arr[i], $"{currentPath}[{i}]", tree, list);
+            }
+        }
+        else if (current is JsonValue jv && jv.TryGetValue<string>(out var strVal))
+        {
+            var isEnc = _cryptoService.TryParseEncrypted(strVal, out _);
+            var isPlain = strVal.StartsWith("PLAIN[", StringComparison.Ordinal) && strVal.EndsWith(']');
+            if (isEnc || isPlain)
+            {
+                tree.SourceMap.TryGetValue(currentPath, out var src);
+                list.Add(new SecretItemInfo(currentPath, isEnc, src?.FilePath));
+            }
+        }
     }
 
     public static void AtomicWriteFile(string targetPath, string content)
@@ -23354,6 +25457,314 @@ public class StarryDslTests
         Assert.Contains("\"vpn.bocchi.rocks\" xray:8443;", nginxConf, StringComparison.Ordinal);
         Assert.Contains("http {", nginxConf, StringComparison.Ordinal);
         Assert.Contains("proxy_pass http://[fd67:b00b:0001:0002::1]:3000;", nginxConf, StringComparison.Ordinal);
+    }
+}
+```
+
+## File: tests/Starry.UnitTests/V34FeaturesTests.cs
+
+**Lines**: 301 | **Size**: 11.8 KB | **Language**: csharp
+
+```csharp
+using System.Globalization;
+using System.Net;
+using System.Text.Json.Nodes;
+using Starry.Core.Configuration;
+using Starry.Core.Containers;
+using Starry.Core.Nodes;
+using Starry.Core.Processes;
+using Starry.Dsl;
+using Starry.Infrastructure.Agent;
+using Starry.Infrastructure.Backups;
+using Starry.Infrastructure.Configuration;
+using Starry.Infrastructure.Containers;
+using Starry.Infrastructure.Diagnostics;
+using Starry.Infrastructure.Localization;
+using Starry.Infrastructure.Network;
+using Starry.Infrastructure.Nodes;
+using Starry.Infrastructure.Security;
+using Xunit;
+
+namespace Starry.UnitTests;
+
+public class V34FeaturesTests
+{
+    private sealed class MockTestNode : INodeConnection
+    {
+        public string NodeName => "node-v34";
+        public string Host => "198.51.100.20";
+        public int Port => 22;
+        public string? DistroId => "debian";
+        public List<string> CommandsRun { get; } = [];
+
+        public Task<ProcessResult> ExecuteCommandAsync(ProcessSpec command, CancellationToken ct = default)
+        {
+            var cmd = $"{command.Executable} {string.Join(" ", command.Arguments)}";
+            CommandsRun.Add(cmd);
+
+            if (cmd.Contains("date -u +%s", StringComparison.Ordinal))
+            {
+                var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture);
+                return Task.FromResult(new ProcessResult(0, now, string.Empty, TimeSpan.Zero));
+            }
+
+            if (cmd.Contains("sysctl", StringComparison.Ordinal))
+            {
+                return Task.FromResult(new ProcessResult(0, "1", string.Empty, TimeSpan.Zero));
+            }
+
+            if (cmd.Contains("test -c /dev/net/tun", StringComparison.Ordinal) ||
+                cmd.Contains("nft -v", StringComparison.Ordinal))
+            {
+                return Task.FromResult(new ProcessResult(0, "nftables v1.0.6", string.Empty, TimeSpan.Zero));
+            }
+
+            if (cmd.Contains("df -m", StringComparison.Ordinal))
+            {
+                return Task.FromResult(new ProcessResult(0, "Filesystem 1M-blocks Used Available Use% Mounted on\n/dev/root 50000 10000 40000 20% /", string.Empty, TimeSpan.Zero));
+            }
+
+            if (cmd.Contains("df -i", StringComparison.Ordinal))
+            {
+                return Task.FromResult(new ProcessResult(0, "Filesystem Inodes IUsed IFree IUse% Mounted on\n/dev/root 1000000 50000 950000 5% /", string.Empty, TimeSpan.Zero));
+            }
+
+            if (cmd.Contains("ss -lnt", StringComparison.Ordinal))
+            {
+                return Task.FromResult(new ProcessResult(0, ":22 :2222 :51820", string.Empty, TimeSpan.Zero));
+            }
+
+            return Task.FromResult(new ProcessResult(0, "success", string.Empty, TimeSpan.Zero));
+        }
+
+        public Task<ProcessResult> ExecuteStreamingCommandAsync(ProcessSpec command, Stream? stdinStream, Stream? stdoutStream, CancellationToken ct = default)
+        {
+            CommandsRun.Add($"{command.Executable} {string.Join(" ", command.Arguments)}");
+            return Task.FromResult(new ProcessResult(0, "success", string.Empty, TimeSpan.Zero));
+        }
+
+        public Task<HttpClient> CreateSocketHttpClientAsync(string socketPath, CancellationToken ct = default)
+        {
+            return Task.FromResult(new HttpClient());
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    [Fact]
+    public async Task SshNodeConnection_BuildsWindowsSafeArguments()
+    {
+        var options = new SshNodeOptions
+        {
+            NodeName = "bocchi",
+            Host = "192.0.2.1",
+            Port = 2222,
+            User = "starry",
+            ControlPathDir = "/tmp/control"
+        };
+
+        await using var conn = new SshNodeConnection(options);
+        var args = conn.BuildSshArguments();
+
+        Assert.Contains("BatchMode=yes", string.Join(" ", args), StringComparison.Ordinal);
+        Assert.Contains("StrictHostKeyChecking=accept-new", string.Join(" ", args), StringComparison.Ordinal);
+        Assert.Contains("UserKnownHostsFile=", string.Join(" ", args), StringComparison.Ordinal);
+        Assert.DoesNotContain("/dev/null", string.Join(" ", args), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MasterKey_PersistenceAndResolution_WorksWithFile()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "starry_master_key_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var (key, targetDir) = RepositoryInitializer.Initialize("test-proj", skipFolderCreate: true, baseDir: tempDir);
+            Assert.NotEmpty(key);
+
+            var keyFile = Path.Combine(targetDir, ".starry", "master.key");
+            Assert.True(File.Exists(keyFile));
+
+            var resolvedKey = MasterKeyResolver.ResolveKey(configDir: targetDir);
+            Assert.NotNull(resolvedKey);
+            Assert.Equal(key, Convert.ToBase64String(resolvedKey));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void SecretManager_UpdateGetList_PreservesGraphReferences()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "starry_secret_mgr_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var starryYaml = """
+                version: "3.0"
+                cluster_name: "test-cluster"
+                services:
+                  web:
+                    image: "nginx"
+                    env:
+                      UPSTREAM_HOST: "$nodes.germany.host"
+                      DB_PASS: "PLAIN[initial_secret]"
+                """;
+            File.WriteAllText(Path.Combine(tempDir, "starry.yaml"), starryYaml);
+
+            var engine = new VirtualConfigEngine();
+            var tree = engine.Load(tempDir, resolveGraph: false);
+
+            var masterKey = CryptoService.ParseMasterKey(CryptoService.GenerateMasterKeyBase64());
+            var manager = new SecretManager();
+
+            manager.SetSecret(tree, "services.web.env.DB_PASS", "my_new_secret", masterKey, tempDir, engine);
+
+            var diskContent = File.ReadAllText(Path.Combine(tempDir, "starry.yaml"));
+            Assert.Contains("$nodes.germany.host", diskContent, StringComparison.Ordinal);
+            Assert.Contains("ENC[AES256_GCM", diskContent, StringComparison.Ordinal);
+
+            var reloadedTree = engine.Load(tempDir, resolveGraph: false);
+            var plaintext = manager.GetSecret(reloadedTree, "services.web.env.DB_PASS", masterKey);
+            Assert.Equal("my_new_secret", plaintext);
+
+            var list = manager.ListSecrets(reloadedTree);
+            Assert.Single(list);
+            Assert.Equal("services.web.env.DB_PASS", list[0].Path);
+            Assert.True(list[0].IsEncrypted);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ConfigValidator_AllowsEncryptedAndGraphHostAndVpnIp()
+    {
+        var tree = new ConfigTree();
+        var nodesObj = new JsonObject
+        {
+            ["germany"] = new JsonObject
+            {
+                ["host"] = "ENC[AES256_GCM:v1:...]",
+                ["port"] = 22,
+                ["vpn_ip"] = "$secrets.vpn_ip"
+            },
+            ["finland"] = new JsonObject
+            {
+                ["ssh"] = "ENC[AES256_GCM:v1:...]",
+                ["port"] = 22
+            }
+        };
+        tree.Root["nodes"] = nodesObj;
+
+        var result = ConfigValidator.Validate(tree);
+        Assert.True(result.IsValid);
+        Assert.DoesNotContain(result.Issues, i => !i.IsWarning);
+    }
+
+    [Fact]
+    public void VirtualConfigEngine_LoadsNestedFilesAndResolvesViaDsl()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "starry_nested_files_" + Guid.NewGuid().ToString("N"));
+        var filesDir = Path.Combine(tempDir, "files", "stickerbot");
+        Directory.CreateDirectory(filesDir);
+        try
+        {
+            File.WriteAllText(Path.Combine(filesDir, "config.json"), "{\"token\":\"12345\"}");
+            File.WriteAllText(Path.Combine(tempDir, "starry.yaml"), """
+                version: "3.0"
+                cluster_name: "test"
+                services:
+                  bot:
+                    image: "stickerbot"
+                    files:
+                      /app/config.json: "$files.stickerbot.['config.json']"
+                """);
+
+            var engine = new VirtualConfigEngine();
+            var tree = engine.Load(tempDir);
+
+            Assert.NotNull(tree.Root["files"]?["stickerbot"]?["config.json"]);
+            Assert.Contains("12345", tree.Root["files"]?["stickerbot"]?["config.json"]?.ToString(), StringComparison.Ordinal);
+
+            var splitDir = Path.Combine(tempDir, "split_out");
+            engine.Split(tree, splitDir, "yaml");
+            Assert.True(File.Exists(Path.Combine(splitDir, "files", "stickerbot", "config.json")));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void BaseSocketContainerRuntime_SpecHash_IsDeterministic()
+    {
+        var spec1 = new ServiceSpec
+        {
+            Name = "shop",
+            Image = "shop:v1",
+            Ports = ["80:80", "443:443"],
+            Volumes = ["data:/app/data"],
+            Environment = new Dictionary<string, string>(StringComparer.Ordinal) { ["ENV"] = "prod" }
+        };
+
+        var spec2 = spec1 with { };
+        var spec3 = spec1 with { Image = "shop:v2" };
+
+        var hash1 = BaseSocketContainerRuntime.ComputeSpecHash(spec1);
+        var hash2 = BaseSocketContainerRuntime.ComputeSpecHash(spec2);
+        var hash3 = BaseSocketContainerRuntime.ComputeSpecHash(spec3);
+
+        Assert.Equal(hash1, hash2, StringComparer.Ordinal);
+        Assert.NotEqual(hash1, hash3, StringComparer.Ordinal);
+    }
+
+    [Fact]
+    public async Task HostPreflightInspector_PerformsAllChecks()
+    {
+        await using var mockNode = new MockTestNode();
+        var results = await HostPreflightInspector.RunDiagnosticsAsync(mockNode, fix: true);
+
+        Assert.Equal(8, results.Count);
+        Assert.Contains(results, r => string.Equals(r.CheckName, "UTC Clock Skew", StringComparison.Ordinal) && r.Passed);
+        Assert.Contains(results, r => string.Equals(r.CheckName, "Sysctl Routing Flags", StringComparison.Ordinal) && r.Passed);
+        Assert.Contains(results, r => string.Equals(r.CheckName, "WireGuard TUN Device", StringComparison.Ordinal) && r.Passed);
+        Assert.Contains(results, r => string.Equals(r.CheckName, "Firewall (nftables)", StringComparison.Ordinal) && r.Passed);
+    }
+
+    [Fact]
+    public void Generators_NftablesRuleset_RespectsNetworkIsolation()
+    {
+        var subnetPairs = new List<Generators.MeshSubnetPair>
+        {
+            new("fd67:b00b:0001:0001::/64", "fd67:b00b:0001:0002::/64")
+        };
+
+        var fsharpPairs = Microsoft.FSharp.Collections.ListModule.OfSeq(subnetPairs);
+        var ruleset = Generators.generateNftablesRuleset(22, 51820, [80, 443], [], fsharpPairs, Microsoft.FSharp.Core.FSharpOption<string>.None);
+
+        Assert.Contains("ip6 saddr . ip6 daddr @allowed_mesh_pairs accept", ruleset, StringComparison.Ordinal);
+        Assert.DoesNotContain("oifname \"starry0\" ip6 saddr . ip6 daddr @allowed_mesh_pairs accept\n        iifname \"starry0\" oifname \"starry0\" accept", ruleset, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DomainEndpointAllocator_ExposesPortAndLists()
+    {
+        var tree = new ConfigTree();
+        var allocated = DomainEndpointAllocator.ExposeService(tree, "web-rule", "shop-web", 3000, "both", 8080, "tcp");
+
+        Assert.Equal("web-rule", allocated.RuleName);
+        Assert.Equal(":8080", allocated.From);
+        Assert.Equal("shop-web:3000", allocated.To);
+
+        var ports = DomainEndpointAllocator.ListPorts(tree);
+        Assert.Single(ports);
+        Assert.Equal("web-rule", ports[0].RuleName);
     }
 }
 ```

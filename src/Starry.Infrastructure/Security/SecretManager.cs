@@ -51,6 +51,92 @@ public sealed class SecretManager
         return count;
     }
 
+    public void SetSecret(
+        ConfigTree tree,
+        string canonicalPath,
+        string plainText,
+        byte[] masterKey,
+        string rootPath,
+        VirtualConfigEngine engine)
+    {
+        ArgumentNullException.ThrowIfNull(tree);
+        ArgumentException.ThrowIfNullOrWhiteSpace(canonicalPath);
+        ArgumentNullException.ThrowIfNull(plainText);
+        ArgumentNullException.ThrowIfNull(masterKey);
+        ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
+        ArgumentNullException.ThrowIfNull(engine);
+
+        var envelope = _cryptoService.Encrypt(Encoding.UTF8.GetBytes(plainText), masterKey, canonicalPath);
+        tree.SetNode(canonicalPath, JsonValue.Create(envelope.FormatEncrypted()));
+
+        SaveTreeAtomically(tree, rootPath, engine);
+    }
+
+    public string GetSecret(
+        ConfigTree tree,
+        string canonicalPath,
+        byte[] masterKey)
+    {
+        ArgumentNullException.ThrowIfNull(tree);
+        ArgumentException.ThrowIfNullOrWhiteSpace(canonicalPath);
+        ArgumentNullException.ThrowIfNull(masterKey);
+
+        var node = tree.FindNode(canonicalPath)
+            ?? throw new KeyNotFoundException($"Secret at canonical path '{canonicalPath}' was not found in the configuration tree.");
+
+        var valStr = node.ToString();
+        if (_cryptoService.TryParseEncrypted(valStr, out var envelope) && envelope != null)
+        {
+            var bytes = _cryptoService.Decrypt(envelope, masterKey, canonicalPath);
+            return Encoding.UTF8.GetString(bytes);
+        }
+
+        if (valStr.StartsWith("PLAIN[", StringComparison.Ordinal) && valStr.EndsWith(']'))
+        {
+            return valStr["PLAIN[".Length..^1];
+        }
+
+        return valStr;
+    }
+
+    public IReadOnlyList<SecretItemInfo> ListSecrets(ConfigTree tree)
+    {
+        ArgumentNullException.ThrowIfNull(tree);
+
+        var list = new List<SecretItemInfo>();
+        CollectSecretsRecursive(tree.Root, string.Empty, tree, list);
+        return list;
+    }
+
+    private void CollectSecretsRecursive(JsonNode? current, string currentPath, ConfigTree tree, List<SecretItemInfo> list)
+    {
+        if (current is JsonObject obj)
+        {
+            foreach (var (k, v) in obj)
+            {
+                var childPath = string.IsNullOrEmpty(currentPath) ? k : $"{currentPath}.{k}";
+                CollectSecretsRecursive(v, childPath, tree, list);
+            }
+        }
+        else if (current is JsonArray arr)
+        {
+            for (var i = 0; i < arr.Count; i++)
+            {
+                CollectSecretsRecursive(arr[i], $"{currentPath}[{i}]", tree, list);
+            }
+        }
+        else if (current is JsonValue jv && jv.TryGetValue<string>(out var strVal))
+        {
+            var isEnc = _cryptoService.TryParseEncrypted(strVal, out _);
+            var isPlain = strVal.StartsWith("PLAIN[", StringComparison.Ordinal) && strVal.EndsWith(']');
+            if (isEnc || isPlain)
+            {
+                tree.SourceMap.TryGetValue(currentPath, out var src);
+                list.Add(new SecretItemInfo(currentPath, isEnc, src?.FilePath));
+            }
+        }
+    }
+
     public static void AtomicWriteFile(string targetPath, string content)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(targetPath);

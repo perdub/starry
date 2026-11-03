@@ -23,12 +23,14 @@
 **`starry`** is an autonomous, single-binary GitOps orchestrator designed to run across heterogeneous cloud providers and low-cost virtual private servers (including NAT-isolated nodes and servers with small 10–20 GB SSDs).
 
 It manages the entire lifecycle of:
-* **Container Runtimes**: Direct Unix Domain Socket control of **Docker Engine** and **Podman** (Rootful & unprivileged Rootless) supporting full Docker Compose specifications (capabilities, sysctls, shm_size, memory limits, and networks).
+* **Container Runtimes**: Direct Unix Domain Socket control of **Docker Engine** and **Podman** (Rootful & unprivileged Rootless) supporting full Docker Compose specifications, automatic engine bootstrap on bare VPS, and Image Digest (`ImageId`) & `starry.spec.hash` drift reconciliation.
 * **Encrypted IPv6 Mesh Networking**: P2P **WireGuard** (`starry0`) running on the ULA prefix **`fd67:b00b::/32`**, assigning each host a `/48` subnet and each container replica a dedicated `/64` subnet with zero-downtime routing.
-* **Functional Configuration Engine (`Starry.Dsl`)**: Pure F# unified graph AST supporting whole-subtree substitution (`$`), object inheritance (`$:`), and automatic `files/*` text mounting.
-* **Host Firewalls & NAT**: Isolated table `inet starry` in **`nftables`** for atomic DNAT port forwarding, inter-container network ACL isolation, and symmetric outbound SNAT.
+* **Cross-Platform CLI (Windows, macOS, Linux)**: Full Windows workstation compatibility (`Win32-OpenSSH`) with automatic TCP loopback bridge (`127.0.0.1:<port>` -> `/var/run/docker.sock`), colon-safe control paths, and TOFU `known_hosts`.
+* **Functional Configuration Engine (`Starry.Dsl`)**: Pure F# unified graph AST supporting whole-subtree substitution (`$`), object inheritance (`$:`), and automatic `files/<service>/*` text mounting.
+* **Persistent Volumes & S3 Auto-Restore**: Multi-volume container support with a 3-step lifecycle: local preservation, automatic pull & restore from S3 on fresh nodes, and zero-disk-overhead streaming backups (`tar | zstd | S3`).
+* **Host Firewalls & NAT**: Isolated table `inet starry` in **`nftables`** for atomic DNAT port forwarding, inter-container network ACL isolation, symmetric outbound SNAT, and `DualStackPortRelay` for IPv4 -> IPv6 bridging.
 * **Scoped Internal DNS**: Embedded DNS server (`fd67:b00b:<host_id>::1`) with source-aware ACL isolation, round-robin replica load-balancing, and egress policy enforcement.
-* **Managed Ingress & L4 SNI Proxy**: Nginx with `stream { ssl_preread on; }` for Layer 4 TLS passthrough, Layer 7 SSL termination, and automated Cloudflare Origin Rules.
+* **Pre-Flight Doctor & Port Randomization**: Host diagnostics (`starry nodes doctor`) verifying strict UTC skew, sysctls, tun device, and port 53, plus lockout-safe SSH port migration (`starry nodes rotate-keys --randomize-ports`).
 * **Operating System Packages**: Unified abstraction across **Apt** (Debian/Ubuntu), **Dnf** (RHEL/AlmaLinux/Rocky/Fedora), **Apk** (Alpine), and **Pacman** (Arch Linux) with rolling security updates.
 * **Security & Secret Management**: In-repository encrypted secrets using **AES-256-GCM** bound to canonical JSON paths with **AAD (Additional Authenticated Data)** to block cut-and-paste tampering.
 * **Zero-Disk Streaming Backups**: Real-time volume backups via `tar | zstd | rclone rcat` without creating intermediate files on constrained VPS disks.
@@ -119,7 +121,15 @@ starry apply --config ./cluster
 | `starry encrypt [path]` | Encrypt all `PLAIN[...]` secrets in configuration into `ENC[...]`. |
 | `starry encrypt global --reencrypt` | Rotate master key, re-encrypt all secrets, and commit to Git. |
 | `starry nodes upgrade --rolling` | Execute zero-downtime rolling OS security updates across nodes. |
-| `starry nodes rotate-keys` | Generate fresh Ed25519 SSH keys and update remote `authorized_keys`. |
+| `starry secret update <path> [val]` | Atomically encrypt and update a secret value preserving graph references. |
+| `starry secret get <path>` | Decrypt and output plaintext secret value using resolved master key. |
+| `starry secret list` | Inspect all encrypted and plaintext secrets with their source files. |
+| `starry secret sync-github` | Push resolved master key to GitHub Actions Secrets. |
+| `starry nodes doctor [--fix]` | Run host preflight checks (UTC clock skew, sysctls, tun device, port 53). |
+| `starry nodes rotate-keys [--randomize-ports]` | Rotate Ed25519 SSH keys and safely migrate ports without lockout risk. |
+| `starry ports list` | List all named bidirectional port routing rules. |
+| `starry domains list` | List all hierarchical domain routes and SNI passthrough endpoints. |
+| `starry expose <svc> <port> [flags]` | Expose container service with optional random port / IP binding. |
 | `starry plan` | Generate and visualize DAG migration graph with colored icons. |
 | `starry apply` | Execute planned actions across the cluster fleet. |
 | `starry net interfaces [--verify]` | Inspect and verify network interfaces, IPv4/IPv6, and NAT status. |

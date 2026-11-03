@@ -85,6 +85,8 @@ public sealed class DnfPackageManager : IOsPackageManager
             "curl" => "curl",
             "rsync" => "rsync",
             "zstd" => "zstd",
+            "docker" => "docker",
+            "podman" => "podman",
             _ => logicalPackage
         };
     }

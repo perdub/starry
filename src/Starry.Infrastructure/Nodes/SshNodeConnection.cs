@@ -44,7 +44,7 @@ public sealed class SshNodeConnection : INodeConnection
         }
 
         Directory.CreateDirectory(_options.ControlPathDir);
-        _controlSocketPath = Path.Combine(_options.ControlPathDir, $"starry-ssh-{_options.User}@{_options.Host}:{_options.Port}-{Guid.NewGuid():N}");
+        _controlSocketPath = Path.Combine(_options.ControlPathDir, $"starry-ssh-{_options.User}@{_options.Host}_{_options.Port}-{Guid.NewGuid():N}");
 
         if (!string.IsNullOrWhiteSpace(_options.PrivateKeyContent))
         {
@@ -127,6 +127,17 @@ public sealed class SshNodeConnection : INodeConnection
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(socketPath);
 
+        if (OperatingSystem.IsWindows())
+        {
+            return await CreateWindowsTcpForwardedHttpClientAsync(socketPath, ct).ConfigureAwait(false);
+        }
+
+        return await CreateUnixDomainSocketHttpClientAsync(socketPath, ct).ConfigureAwait(false);
+    }
+
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope", Justification = "SocketsHttpHandler ownership transferred to HttpClient")]
+    private async Task<HttpClient> CreateUnixDomainSocketHttpClientAsync(string socketPath, CancellationToken ct)
+    {
         var localSocketPath = Path.Combine(_options.ControlPathDir, $".sock-{Guid.NewGuid():N}.sock");
         _tempSocketPaths.Add(localSocketPath);
 
@@ -138,22 +149,8 @@ public sealed class SshNodeConnection : INodeConnection
             $"{_options.User}@{_options.Host}"
         };
 
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = SshExecutablePath,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-        foreach (var arg in tunnelArgs)
-        {
-            startInfo.ArgumentList.Add(arg);
-        }
+        var process = StartTunnelProcess(tunnelArgs);
 
-        var process = new Process { StartInfo = startInfo };
-        process.Start();
-        _tunnelProcesses.Add(process);
-
-        // Poll up to 10 seconds for the forwarded Unix domain socket to appear
         var attempts = 0;
         const int maxAttempts = 200; // 200 * 50ms = 10 seconds
         while (!File.Exists(localSocketPath) && attempts < maxAttempts)
@@ -178,26 +175,123 @@ public sealed class SshNodeConnection : INodeConnection
             }
         };
 
-        var client = new HttpClient(handler, disposeHandler: true)
+        return new HttpClient(handler, disposeHandler: true)
         {
             BaseAddress = DefaultRemoteSocketUri
         };
+    }
 
-        return client;
+    private async Task<HttpClient> CreateWindowsTcpForwardedHttpClientAsync(string remoteSocketPath, CancellationToken ct)
+    {
+        int freePort;
+        using (var listener = new TcpListener(System.Net.IPAddress.Loopback, 0))
+        {
+            listener.Start();
+            freePort = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+            listener.Stop();
+        }
+
+        var tunnelArgs = new List<string>(BuildSshArguments())
+        {
+            "-N",
+            "-L",
+            $"127.0.0.1:{freePort}:{remoteSocketPath}",
+            $"{_options.User}@{_options.Host}"
+        };
+
+        var process = StartTunnelProcess(tunnelArgs);
+        await PollTcpPortReadyAsync(process, freePort, ct).ConfigureAwait(false);
+
+        return new HttpClient
+        {
+            BaseAddress = new Uri($"http://127.0.0.1:{freePort}/")
+        };
+    }
+
+    private Process StartTunnelProcess(IEnumerable<string> tunnelArgs)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = SshExecutablePath,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        foreach (var arg in tunnelArgs)
+        {
+            startInfo.ArgumentList.Add(arg);
+        }
+
+        var process = new Process { StartInfo = startInfo };
+        process.Start();
+        _tunnelProcesses.Add(process);
+        return process;
+    }
+
+    private static async Task PollTcpPortReadyAsync(Process process, int freePort, CancellationToken ct)
+    {
+        var attempts = 0;
+        const int maxAttempts = 200;
+        var connected = false;
+
+        while (!connected && attempts < maxAttempts)
+        {
+            if (process.HasExited)
+            {
+                throw new InvalidOperationException($"SSH TCP-to-socket tunnel exited prematurely with code {process.ExitCode}.");
+            }
+
+            try
+            {
+                using var tcp = new TcpClient();
+                var connectTask = tcp.ConnectAsync("127.0.0.1", freePort);
+                var completed = await Task.WhenAny(connectTask, Task.Delay(50, ct)).ConfigureAwait(false);
+                if (completed == connectTask && tcp.Connected)
+                {
+                    connected = true;
+                    break;
+                }
+            }
+            catch (SocketException)
+            {
+                // Port not ready yet
+            }
+
+            await Task.Delay(50, ct).ConfigureAwait(false);
+            attempts++;
+        }
+
+        if (!connected)
+        {
+            KillTunnelSafe(process);
+            throw new TimeoutException($"SSH TCP forwarding timed out waiting for 127.0.0.1:{freePort}.");
+        }
+    }
+
+    private static void KillTunnelSafe(Process process)
+    {
+        try
+        {
+            process.Kill(entireProcessTree: true);
+        }
+        catch (InvalidOperationException)
+        {
+            // Ignore if terminated
+        }
     }
 
     public IReadOnlyList<string> BuildSshArguments()
     {
+        var knownHostsPath = Path.Combine(_options.ControlPathDir, "known_hosts");
         var args = new List<string>
         {
             "-p", _options.Port.ToString(CultureInfo.InvariantCulture),
             "-o", "BatchMode=yes",
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "StrictHostKeyChecking=accept-new",
+            "-o", $"UserKnownHostsFile={knownHostsPath}",
             "-o", "IdentitiesOnly=yes"
         };
 
-        if (!string.IsNullOrEmpty(_controlSocketPath))
+        if (!OperatingSystem.IsWindows() && !string.IsNullOrEmpty(_controlSocketPath))
         {
             args.Add("-o");
             args.Add("ControlMaster=auto");
@@ -305,6 +399,11 @@ public sealed class SshNodeConnection : INodeConnection
         {
             try
             {
+                var len = new FileInfo(_tempKeyPath).Length;
+                if (len > 0)
+                {
+                    File.WriteAllBytes(_tempKeyPath, new byte[len]);
+                }
                 File.Delete(_tempKeyPath);
             }
             catch (IOException)

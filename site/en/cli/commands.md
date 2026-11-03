@@ -75,61 +75,110 @@ Lists enrolled nodes, their internal WireGuard addresses, connection health, and
 starry nodes list
 ```
 
-### `starry nodes upgrade`
+### `starry nodes doctor`
 
-Triggers security update installation on a specified node following the defined `reboot_policy`.
+Executes preflight diagnostics across nodes:
+- UTC clock skew check (skew within 30s threshold to avoid WireGuard handshake drops).
+- Kernel IP forwarding sysctls (`net.ipv4.ip_forward`, `net.ipv6.conf.all.forwarding`, `proxy_ndp`).
+- Availability of `/dev/net/tun` and `nftables`.
+- Port 53 conflicts with `systemd-resolved`.
+- SELinux mode, root disk space, and free inode reserves.
 
 ```bash
-starry nodes upgrade <node-name> [--drain]
+# Diagnostic check:
+starry nodes doctor
+
+# Automatically fix issues (enabling sysctls, disabling systemd-resolved on port 53):
+starry nodes doctor --fix
+```
+
+### `starry nodes rotate-keys`
+
+Proactively rotates Ed25519 SSH keys and WireGuard keypairs across all nodes with rollback protection.
+With `--randomize-ports`, safely migrates SSH to a random port `10000..60000` with lockout prevention.
+
+```bash
+starry nodes rotate-keys [--randomize-ports]
 ```
 
 ---
 
 ## 4. Secret Operations (`starry secret`)
 
-### `starry secret keygen`
+### `starry secret update` (alias: `set`)
 
-Generates a cryptographically strong 256-bit AES-256-GCM master encryption key.
+Encrypts and atomically writes a secret at its canonical path, **preserving all `$` graph references** untouched:
 
 ```bash
-starry secret keygen
+starry secret update services.db.env.POSTGRES_PASSWORD "SuperSecretPass123"
 ```
 
-### `starry secret encrypt`
+### `starry secret get`
 
-Encrypts plain text strings using the key defined in `STARRY_MASTER_KEY`:
+Decrypts and displays the plaintext secret value:
 
 ```bash
-starry secret encrypt "postgres-super-secure-password"
-# Output: ENC[AES256_GCM,data:...,iv:...,tag:...]
+starry secret get services.db.env.POSTGRES_PASSWORD
 ```
 
-### `starry secret decrypt`
+### `starry secret list`
 
-Decrypts an `ENC[...]` token for local verification or debugging:
+Lists all encrypted (`ENC[...]`) and plaintext (`PLAIN[...]`) secret keys across the repository.
 
 ```bash
-starry secret decrypt "ENC[AES256_GCM,data:...,iv:...,tag:...]"
+starry secret list
+```
+
+### `starry secret sync-github`
+
+Uploads the resolved master key (`.starry/master.key` or `STARRY_MASTER_KEY`) to GitHub Actions Secrets via `gh secret set`.
+
+```bash
+starry secret sync-github [--name STARRY_MASTER_KEY]
 ```
 
 ---
 
-## 5. Security & Key Rotation
+## 5. Port Routing & Service Exposure
 
-### `starry rotate-secrets`
+### `starry ports list`
 
-Decrypts all `ENC[...]` values, generates a fresh master key, re-encrypts the manifest, and syncs repository secrets via the GitHub API.
+Lists all named bidirectional port routing rules:
 
 ```bash
-starry rotate-secrets [--github-repo user/repo]
+starry ports list
 ```
 
-### `starry rotate-keys`
+### `starry domains list`
 
-Proactively rotates Ed25519 SSH keys and WireGuard keypairs across all nodes with rollback protection.
+Inspects hierarchical domain routes, target endpoints, and SNI passthroughs:
 
 ```bash
-starry rotate-keys [--dry-run]
+starry domains list
+```
+
+### `starry expose`
+
+Exposes a service port with optional port randomization and IPv4/IPv6 family binding:
+
+```bash
+# Expose on a random port:
+starry expose shop-web 3000 --family both --port random
+
+# Expose on a specific port:
+starry expose shop-web 3000 --port 8080 --proto tcp
+```
+
+---
+
+## 6. Contextual Help (`starry help`)
+
+Every Starry command and subcommand provides an interactive help card with syntax, flags, and examples:
+
+```bash
+starry help secret
+starry nodes --help
+starry expose -h
 ```
 
 ---

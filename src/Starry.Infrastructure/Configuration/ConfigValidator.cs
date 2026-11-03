@@ -56,7 +56,11 @@ public static class ConfigValidator
                 if (nodeObj.TryGetPropertyValue("vpn_ip", out var vpnIpVal) && vpnIpVal != null)
                 {
                     var ipStr = vpnIpVal.ToString();
-                    if (!IPAddress.TryParse(ipStr, out _))
+                    if (!string.IsNullOrWhiteSpace(ipStr) &&
+                        !ipStr.StartsWith("ENC[", StringComparison.Ordinal) &&
+                        !ipStr.StartsWith("PLAIN[", StringComparison.Ordinal) &&
+                        !ipStr.StartsWith('$') &&
+                        !IPAddress.TryParse(ipStr, out _))
                     {
                         issues.Add(new ValidationIssue($"{nodePath}.vpn_ip", $"Node '{nodeName}' has invalid VPN IP address: '{ipStr}'.", sourceEntry?.FilePath));
                     }

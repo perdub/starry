@@ -33,11 +33,24 @@ public sealed class ConfigTree
         var segments = path.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         JsonNode? current = Root;
 
-        foreach (var segment in segments)
+        for (var i = 0; i < segments.Length; i++)
         {
-            if (current is JsonObject obj && obj.TryGetPropertyValue(segment, out var next))
+            var segment = segments[i];
+            if (current is JsonObject obj)
             {
-                current = next;
+                if (obj.TryGetPropertyValue(segment, out var next))
+                {
+                    current = next;
+                }
+                else
+                {
+                    var remaining = string.Join(".", segments[i..]);
+                    if (obj.TryGetPropertyValue(remaining, out var remainingVal))
+                    {
+                        return remainingVal;
+                    }
+                    return null;
+                }
             }
             else
             {

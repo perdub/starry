@@ -30,6 +30,11 @@ public static class NodeNetworkInspector
 
         var (extIpv4, extIpv6) = await QueryExternalIpsAsync(node, ct).ConfigureAwait(false);
 
+        if (verifyReachability)
+        {
+            await VerifyReachabilityAsync(node, ct).ConfigureAwait(false);
+        }
+
         if (ipResult.IsSuccess && !string.IsNullOrWhiteSpace(ipResult.StandardOutput))
         {
             try
@@ -91,6 +96,18 @@ public static class NodeNetworkInspector
         var extIpv6 = extIpv6Result.IsSuccess ? extIpv6Result.StandardOutput.Trim() : null;
 
         return (extIpv4, extIpv6);
+    }
+
+    private static async Task<bool> VerifyReachabilityAsync(INodeConnection node, CancellationToken ct)
+    {
+        var pingSpec = new ProcessSpec
+        {
+            Executable = "sh",
+            Arguments = ["-c", "ping -c 1 -W 2 1.1.1.1 2>/dev/null || curl -s --max-time 2 https://1.1.1.1 2>/dev/null || true"],
+            Timeout = TimeSpan.FromSeconds(5)
+        };
+        var res = await node.ExecuteCommandAsync(pingSpec, ct).ConfigureAwait(false);
+        return res.IsSuccess;
     }
 
     private static NodeInterfaceInfo? ParseInterfaceInfo(JsonObject ifaceObj, string? extIpv4, string? extIpv6)

@@ -3,12 +3,14 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using Starry.Core.Backups;
 using Starry.Core.Configuration;
 using Starry.Core.Containers;
 using Starry.Core.Dns;
 using Starry.Core.Nodes;
 using Starry.Core.Processes;
 using Starry.Core.Security;
+using Starry.Infrastructure.Backups;
 using Starry.Infrastructure.Containers;
 using Starry.Infrastructure.Dns;
 using Starry.Infrastructure.Network;
@@ -61,7 +63,7 @@ public sealed partial class ClusterOrchestrator
         _defaultRuntime = defaultRuntime ?? new DockerRuntime();
         _dnsProvider = dnsProvider;
         _processRunner = processRunner ?? new ProcessRunner();
-        _masterKey = masterKey ?? ResolveMasterKeyFromEnvironment();
+        _masterKey = masterKey ?? MasterKeyResolver.ResolveKey();
     }
 
     /// <summary>
@@ -112,33 +114,7 @@ public sealed partial class ClusterOrchestrator
         ArgumentException.ThrowIfNullOrWhiteSpace(nodeName);
         ArgumentNullException.ThrowIfNull(nodeObj);
 
-        var host = nodeObj["host"]?.ToString() ?? "localhost";
-        var port = nodeObj.TryGetPropertyValue("port", out var pVal) &&
-                   int.TryParse(pVal?.ToString(), CultureInfo.InvariantCulture, out var p)
-            ? p
-            : 22;
-        var user = nodeObj["user"]?.ToString() ?? "root";
-
-        if (nodeObj.TryGetPropertyValue("ssh", out var sshVal) && sshVal != null)
-        {
-            var sshStr = sshVal.ToString();
-            var (parsedUser, parsedHost, parsedPort) = ParseSshString(sshStr);
-            if (!string.IsNullOrEmpty(parsedHost))
-            {
-                host = parsedHost;
-                user = parsedUser;
-                port = parsedPort;
-            }
-        }
-        var sshKey = nodeObj["ssh_key"]?.ToString();
-        var jumpHost = nodeObj["jump_host"]?.ToString();
-        var isLocalFlag = bool.TryParse(nodeObj["is_local"]?.ToString(), out var ilb) && ilb;
-
-        var isLocalHost = string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase) ||
-                          string.Equals(host, DefaultLocalIp, StringComparison.Ordinal) ||
-                          string.Equals(host, "::1", StringComparison.Ordinal);
-
-        var isLocal = isLocalFlag || (isLocalHost && string.IsNullOrEmpty(sshKey) && string.IsNullOrEmpty(jumpHost));
+        var (host, port, user, sshKey, jumpHost, isLocal) = ResolveNodeEndpointDetails(nodeName, nodeObj);
 
         if (isLocal)
         {
@@ -166,6 +142,45 @@ public sealed partial class ClusterOrchestrator
         var ssh = new SshNodeConnection(sshOptions, _processRunner);
         await ssh.InitializeAsync(ct).ConfigureAwait(false);
         return ssh;
+    }
+
+    private (string Host, int Port, string User, string? SshKey, string? JumpHost, bool IsLocal) ResolveNodeEndpointDetails(string nodeName, JsonObject nodeObj)
+    {
+        var host = nodeObj["host"]?.ToString() ?? "localhost";
+        host = DecryptSecretString(host, $"nodes.{nodeName}.host");
+
+        var port = nodeObj.TryGetPropertyValue("port", out var pVal) &&
+                   int.TryParse(pVal?.ToString(), CultureInfo.InvariantCulture, out var p)
+            ? p
+            : 22;
+        var user = nodeObj["user"]?.ToString() ?? "root";
+
+        if (nodeObj.TryGetPropertyValue("ssh", out var sshVal) && sshVal != null)
+        {
+            var sshStr = DecryptSecretString(sshVal.ToString(), $"nodes.{nodeName}.ssh");
+            var (parsedUser, parsedHost, parsedPort) = ParseSshString(sshStr);
+            if (!string.IsNullOrEmpty(parsedHost))
+            {
+                host = parsedHost;
+                user = parsedUser;
+                port = parsedPort;
+            }
+        }
+
+        var sshKey = nodeObj["ssh_key"]?.ToString();
+        var jumpHost = nodeObj["jump_host"]?.ToString();
+        if (!string.IsNullOrEmpty(jumpHost))
+        {
+            jumpHost = DecryptSecretString(jumpHost, $"nodes.{nodeName}.jump_host");
+        }
+
+        var isLocalFlag = bool.TryParse(nodeObj["is_local"]?.ToString(), out var ilb) && ilb;
+        var isLocalHost = string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase) ||
+                          string.Equals(host, DefaultLocalIp, StringComparison.Ordinal) ||
+                          string.Equals(host, "::1", StringComparison.Ordinal);
+
+        var isLocal = isLocalFlag || (isLocalHost && string.IsNullOrEmpty(sshKey) && string.IsNullOrEmpty(jumpHost));
+        return (host, port, user, sshKey, jumpHost, isLocal);
     }
 
     private static (string User, string Host, int Port) ParseSshString(string input)
@@ -299,7 +314,7 @@ public sealed partial class ClusterOrchestrator
         switch (action.ActionType)
         {
             case PlanActionType.CreateNode:
-                await ExecuteCreateNodeActionAsync(action, nodes, logger, ct).ConfigureAwait(false);
+                await ExecuteCreateNodeActionAsync(action, config, nodes, logger, ct).ConfigureAwait(false);
                 break;
 
             case PlanActionType.ConfigureWireGuardMesh:
@@ -329,6 +344,7 @@ public sealed partial class ClusterOrchestrator
 
     private async Task ExecuteCreateNodeActionAsync(
         PlanAction action,
+        ConfigTree config,
         IReadOnlyList<INodeConnection> nodes,
         Action<string>? logger,
         CancellationToken ct)
@@ -340,7 +356,25 @@ public sealed partial class ClusterOrchestrator
         var packageManager = _packageManagerFactory.ResolveForNode(node);
         logger?.Invoke($"Installing baseline system packages on node '{node.NodeName}' using {packageManager.GetType().Name}...");
 
-        await packageManager.EnsurePackagesInstalledAsync(node, BaselineLogicalPackages, ct).ConfigureAwait(false);
+        var nodeObj = config.Root["nodes"]?[node.NodeName] as JsonObject;
+        var engine = nodeObj?["engine"]?.ToString() ?? "docker";
+
+        var packagesToInstall = new List<string>(BaselineLogicalPackages)
+        {
+            engine
+        };
+
+        await packageManager.EnsurePackagesInstalledAsync(node, packagesToInstall, ct).ConfigureAwait(false);
+
+        var startCmd = string.Equals(engine, "podman", StringComparison.OrdinalIgnoreCase)
+            ? "systemctl enable --now podman.socket || true"
+            : "systemctl enable --now docker || service docker start || true";
+
+        await node.ExecuteCommandAsync(new ProcessSpec
+        {
+            Executable = "sh",
+            Arguments = ["-c", startCmd]
+        }, ct).ConfigureAwait(false);
     }
 
     private async Task ExecuteConfigureWireGuardMeshActionAsync(
@@ -435,8 +469,97 @@ public sealed partial class ClusterOrchestrator
         var targetNodeObj = config.Root["nodes"]?[targetNode.NodeName] as JsonObject;
         var runtime = ResolveRuntimeForNode(targetNodeObj);
 
+        await EnsureServiceVolumesPreparedAsync(targetNode, spec, config, logger, ct).ConfigureAwait(false);
+
         logger?.Invoke($"Deploying container service '{spec.Name}' [{spec.Image}] on node '{targetNode.NodeName}' (priority: {spec.Priority})...");
         await runtime.DeployContainerAsync(targetNode, spec, ct).ConfigureAwait(false);
+    }
+
+    private async Task EnsureServiceVolumesPreparedAsync(
+        INodeConnection node,
+        ServiceSpec spec,
+        ConfigTree config,
+        Action<string>? logger,
+        CancellationToken ct)
+    {
+        var backupProvider = ResolveBackupStorageProvider(config);
+        foreach (var vol in spec.Volumes)
+        {
+            var colon = vol.IndexOf(':', StringComparison.Ordinal);
+            var volNameOrPath = colon > 0 ? vol[..colon] : vol;
+            if (volNameOrPath.StartsWith('/') || volNameOrPath.StartsWith('.'))
+            {
+                await node.ExecuteCommandAsync(new ProcessSpec
+                {
+                    Executable = "mkdir",
+                    Arguments = ["-p", volNameOrPath]
+                }, ct).ConfigureAwait(false);
+                continue;
+            }
+
+            var checkRes = await node.ExecuteCommandAsync(new ProcessSpec
+            {
+                Executable = "sh",
+                Arguments = ["-c", $"test -d /var/lib/docker/volumes/{volNameOrPath}/_data || test -d /var/lib/containers/storage/volumes/{volNameOrPath}/_data"]
+            }, ct).ConfigureAwait(false);
+
+            if (checkRes.IsSuccess)
+            {
+                continue;
+            }
+
+            var targetVolumePath = $"/var/lib/docker/volumes/{volNameOrPath}/_data";
+            if (backupProvider != null && await backupProvider.HasBackupAsync(node, volNameOrPath, ct).ConfigureAwait(false))
+            {
+                logger?.Invoke($"Restoring S3 backup for volume '{volNameOrPath}' to node '{node.NodeName}'...");
+                await backupProvider.StreamRestoreAsync(node, volNameOrPath, targetVolumePath, ct).ConfigureAwait(false);
+            }
+            else
+            {
+                await node.ExecuteCommandAsync(new ProcessSpec
+                {
+                    Executable = "mkdir",
+                    Arguments = ["-p", targetVolumePath]
+                }, ct).ConfigureAwait(false);
+            }
+        }
+    }
+
+    private IBackupStorageProvider? ResolveBackupStorageProvider(ConfigTree config)
+    {
+        if (config.Root.TryGetPropertyValue("s3", out var s3Node) && s3Node is JsonObject s3Obj)
+        {
+            var bucket = s3Obj["bucket"]?.ToString() ?? "starry-backups";
+            var endpoint = s3Obj["endpoint"]?.ToString();
+            var region = s3Obj["region"]?.ToString() ?? "us-east-1";
+            var accessKey = s3Obj["access_key"]?.ToString();
+            var secretKey = s3Obj["secret_key"]?.ToString();
+            var prefix = s3Obj["prefix"]?.ToString();
+
+            if (!string.IsNullOrEmpty(accessKey)) accessKey = DecryptSecretString(accessKey, "s3.access_key");
+            if (!string.IsNullOrEmpty(secretKey)) secretKey = DecryptSecretString(secretKey, "s3.secret_key");
+
+            return new S3BackupStorageProvider(new S3StorageOptions
+            {
+                Bucket = bucket,
+                Endpoint = endpoint,
+                Region = region,
+                AccessKey = accessKey,
+                SecretKey = secretKey,
+                Prefix = prefix
+            });
+        }
+
+        if (config.Root.TryGetPropertyValue("backups", out var bNode) && bNode is JsonObject bObj)
+        {
+            var dest = bObj["remote"]?.ToString() ?? bObj["destination"]?.ToString();
+            if (!string.IsNullOrEmpty(dest))
+            {
+                return new RcloneBackupStorageProvider(dest);
+            }
+        }
+
+        return null;
     }
 
     private async Task ExecuteMigrateServiceBlueGreenActionAsync(
@@ -1235,7 +1358,8 @@ public sealed partial class ClusterOrchestrator
             ct.ThrowIfCancellationRequested();
             var nodeObj = config.Root["nodes"]?[node.NodeName] as JsonObject;
 
-            var vpnIp = nodeObj?["vpn_ip"]?.ToString() ?? DefaultWireGuardIp;
+            var vpnIpRaw = nodeObj?["vpn_ip"]?.ToString() ?? DefaultWireGuardIp;
+            var vpnIp = DecryptSecretString(vpnIpRaw, $"nodes.{node.NodeName}.vpn_ip");
             var isPublic = bool.TryParse(nodeObj?["is_public"]?.ToString(), out var ipb) && ipb;
 
             var (privKey, pubKey) = await ResolveWireGuardKeysForNodeAsync(node, nodeObj, ct).ConfigureAwait(false);
@@ -1316,8 +1440,9 @@ public sealed partial class ClusterOrchestrator
     {
         var result = await node.ExecuteCommandAsync(new ProcessSpec
         {
-            Executable = "sh",
-            Arguments = ["-c", $"echo '{privateKey}' | wg pubkey 2>/dev/null || true"]
+            Executable = "wg",
+            Arguments = ["pubkey"],
+            StandardInputBytes = Encoding.UTF8.GetBytes(privateKey + "\n")
         }, ct).ConfigureAwait(false);
 
         var pubKey = result.StandardOutput.Trim();
@@ -1632,27 +1757,5 @@ public sealed partial class ClusterOrchestrator
         }
 
         return value;
-    }
-
-    private static byte[]? ResolveMasterKeyFromEnvironment()
-    {
-        var envVal = Environment.GetEnvironmentVariable("STARRY_MASTER_KEY");
-        if (!string.IsNullOrWhiteSpace(envVal))
-        {
-            try
-            {
-                return CryptoService.ParseMasterKey(envVal);
-            }
-            catch (FormatException)
-            {
-                // Invalid base64 or key format in environment variable; return null
-            }
-            catch (ArgumentException)
-            {
-                // Invalid key length; return null
-            }
-        }
-
-        return null;
     }
 }

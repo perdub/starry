@@ -144,8 +144,16 @@ public abstract class BaseSocketContainerRuntime : IContainerRuntime
 
         if (existing != null)
         {
-            await ReconcileExistingContainerAsync(client, existing, filesChanged, ct).ConfigureAwait(false);
-            return;
+            var shouldRecreate = await CheckContainerDriftAsync(client, existing, spec, ct).ConfigureAwait(false);
+            if (shouldRecreate)
+            {
+                await client.DeleteAsync(new Uri(BaseDockerUri, $"{ApiVersionPrefix}/containers/{existing.Id}?force=true"), ct).ConfigureAwait(false);
+            }
+            else
+            {
+                await ReconcileExistingContainerAsync(client, existing, filesChanged, ct).ConfigureAwait(false);
+                return;
+            }
         }
 
         // If VIP address is specified, ensure it is assigned to starry0 interface on the node
@@ -190,6 +198,71 @@ public abstract class BaseSocketContainerRuntime : IContainerRuntime
         {
             await StartContainerAsync(client, existing.Id, ct).ConfigureAwait(false);
         }
+    }
+
+    private static async Task<bool> CheckContainerDriftAsync(HttpClient client, ContainerState existing, ServiceSpec spec, CancellationToken ct)
+    {
+        try
+        {
+            var inspectRes = await client.GetAsync(new Uri(BaseDockerUri, $"{ApiVersionPrefix}/containers/{existing.Id}/json"), ct).ConfigureAwait(false);
+            if (!inspectRes.IsSuccessStatusCode)
+            {
+                return false;
+            }
+
+            var inspectStr = await inspectRes.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            var inspectJson = JsonNode.Parse(inspectStr) as JsonObject;
+            var runningSpecHash = inspectJson?["Config"]?["Labels"]?["starry.spec.hash"]?.ToString();
+            var runningImageId = inspectJson?["Image"]?.ToString();
+
+            string? latestImageId = null;
+            var imgRes = await client.GetAsync(new Uri(BaseDockerUri, $"{ApiVersionPrefix}/images/{Uri.EscapeDataString(spec.Image)}/json"), ct).ConfigureAwait(false);
+            if (imgRes.IsSuccessStatusCode)
+            {
+                var imgStr = await imgRes.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                var imgJson = JsonNode.Parse(imgStr) as JsonObject;
+                latestImageId = imgJson?["Id"]?.ToString();
+            }
+
+            var desiredSpecHash = ComputeSpecHash(spec);
+            var specHashChanged = !string.IsNullOrEmpty(runningSpecHash) && !string.Equals(runningSpecHash, desiredSpecHash, StringComparison.Ordinal);
+            var imageDigestChanged = !string.IsNullOrEmpty(latestImageId) && !string.IsNullOrEmpty(runningImageId) && !string.Equals(runningImageId, latestImageId, StringComparison.Ordinal);
+
+            return specHashChanged || imageDigestChanged;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return false;
+        }
+    }
+
+    public static string ComputeSpecHash(ServiceSpec spec)
+    {
+        ArgumentNullException.ThrowIfNull(spec);
+        var sb = new StringBuilder();
+        sb.Append(spec.Image).Append('|')
+          .Append(spec.Command).Append('|')
+          .Append(spec.Entrypoint).Append('|')
+          .Append(spec.WorkingDir).Append('|')
+          .Append(spec.User).Append('|')
+          .Append(spec.Privileged).Append('|')
+          .Append(spec.NetworkMode).Append('|')
+          .Append(spec.ShmSize).Append('|')
+          .Append(spec.MemLimit).Append('|')
+          .Append(spec.Cpus).Append('|')
+          .Append(spec.Egress).Append('|')
+          .Append(string.Join(",", spec.Ports.OrderBy(x => x, StringComparer.Ordinal))).Append('|')
+          .Append(string.Join(",", spec.Volumes.OrderBy(x => x, StringComparer.Ordinal))).Append('|')
+          .Append(string.Join(",", spec.Networks.OrderBy(x => x, StringComparer.Ordinal))).Append('|')
+          .Append(string.Join(",", spec.CapAdd.OrderBy(x => x, StringComparer.Ordinal))).Append('|')
+          .Append(string.Join(",", spec.CapDrop.OrderBy(x => x, StringComparer.Ordinal))).Append('|')
+          .Append(string.Join(",", spec.Devices.OrderBy(x => x, StringComparer.Ordinal))).Append('|')
+          .Append(string.Join(",", spec.ExtraHosts.OrderBy(x => x, StringComparer.Ordinal))).Append('|')
+          .Append(string.Join(",", spec.Environment.OrderBy(x => x.Key, StringComparer.Ordinal).Select(x => $"{x.Key}={x.Value}"))).Append('|')
+          .Append(string.Join(",", spec.Files.OrderBy(x => x.Key, StringComparer.Ordinal).Select(x => $"{x.Key}={x.Value}")));
+
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(sb.ToString()));
+        return Convert.ToHexStringLower(hash);
     }
 
     public async Task StreamImagePeerToPeerAsync(
@@ -305,6 +378,7 @@ public abstract class BaseSocketContainerRuntime : IContainerRuntime
         }
         labels["managed-by"] = "starry";
         labels["starry.priority"] = spec.Priority.ToString(CultureInfo.InvariantCulture);
+        labels["starry.spec.hash"] = ComputeSpecHash(spec);
 
         var (exposedPorts, portBindings) = BuildPortConfigurations(spec.Ports);
         var hostConfig = BuildHostConfig(spec, binds, portBindings);

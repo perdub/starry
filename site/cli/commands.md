@@ -75,61 +75,110 @@ starry nodes bootstrap root@203.0.113.10 \
 starry nodes list
 ```
 
-### `starry nodes upgrade`
+### `starry nodes doctor`
 
-Выполняет принудительную проверку и установку системных обновлений безопасности на указанной ноде с соблюдением политики `reboot_policy`.
+Выполняет комплексную проверку серверов перед развертыванием кластера:
+- Синхронизация времени по UTC (рассинхрон не более 30 сек во избежание сбоев рукопожатий WireGuard).
+- Флаги маршрутизации ядра (`net.ipv4.ip_forward`, `net.ipv6.conf.all.forwarding`, `proxy_ndp`).
+- Доступность интерфейса `/dev/net/tun` и файрвола `nftables`.
+- Конфликты за порт 53 с `systemd-resolved`.
+- Состояние SELinux, доступный объем диска и запас инодов.
 
 ```bash
-starry nodes upgrade <node-name> [--drain]
+# Диагностика:
+starry nodes doctor
+
+# Автоматическое исправление найденных конфликтов (включение sysctl, отключение systemd-resolved):
+starry nodes doctor --fix
+```
+
+### `starry nodes rotate-keys`
+
+Генерирует новые пары ключей Ed25519 (SSH) и WireGuard, разворачивает их на нодах с предварительной проверкой связности и удаляет устаревшие ключи.
+С флагом `--randomize-ports` производит безопасную миграцию SSH-порта на случайный диапазон `10000..60000` без риска потери доступа (lockout prevention).
+
+```bash
+starry nodes rotate-keys [--randomize-ports]
 ```
 
 ---
 
 ## 4. Управление секретами (`starry secret`)
 
-### `starry secret keygen`
+### `starry secret update` (алиас: `set`)
 
-Генерирует новый криптографически стойкий 256-битный мастер-ключ AES-256-GCM.
+Шифрует и атомарно записывает секрет по его каноническому пути, **сохраняя неизменными все `$`-ссылки** в конфигурации:
 
 ```bash
-starry secret keygen
+starry secret update services.db.env.POSTGRES_PASSWORD "SuperSecretPass123"
 ```
 
-### `starry secret encrypt`
+### `starry secret get`
 
-Шифрует открытую строку мастер-ключом из переменной `STARRY_MASTER_KEY`:
+Расшифровывает и выводит открытое значение секрета:
 
 ```bash
-starry secret encrypt "postgres-super-secure-password"
-# Вывод: ENC[AES256_GCM,data:...,iv:...,tag:...]
+starry secret get services.db.env.POSTGRES_PASSWORD
 ```
 
-### `starry secret decrypt`
+### `starry secret list`
 
-Расшифровывает маркер `ENC[...]` для проверки или отладки:
+Выводит таблицу всех зашифрованных (`ENC[...]`) и открытых (`PLAIN[...]`) секретов в репозитории с указанием исходных файлов.
 
 ```bash
-starry secret decrypt "ENC[AES256_GCM,data:...,iv:...,tag:...]"
+starry secret list
+```
+
+### `starry secret sync-github`
+
+Передает локально разрешенный мастер-ключ (`.starry/master.key` или `STARRY_MASTER_KEY`) в секреты GitHub Actions через утилиту `gh`.
+
+```bash
+starry secret sync-github [--name STARRY_MASTER_KEY]
 ```
 
 ---
 
-## 5. Ротация ключей безопасности
+## 5. Маршрутизация портов и публикация сервисов
 
-### `starry rotate-secrets`
+### `starry ports list`
 
-Дешифрует все токены `ENC[...]` в текущем файле конфигурации, генерирует новый мастер-ключ, перешифровывает все значения и обновляет секрет в GitHub Actions через API.
+Выводит список всех именованных правил двунаправленной маршрутизации портов:
 
 ```bash
-starry rotate-secrets [--github-repo user/repo]
+starry ports list
 ```
 
-### `starry rotate-keys`
+### `starry domains list`
 
-Генерирует новые пары ключей Ed25519 (SSH) и WireGuard, разворачивает их на нодах с предварительной проверкой связности и удаляет устаревшие ключи.
+Выводит иерархическое дерево маршрутов доменов, точек входа и Layer 4 SNI-прокси:
 
 ```bash
-starry rotate-keys [--dry-run]
+starry domains list
+```
+
+### `starry expose`
+
+Публикует порт сервиса во внешний мир с опциональной рандомизацией порта и привязкой IPv4/IPv6:
+
+```bash
+# Опубликовать веб-сервис на случайном порту:
+starry expose shop-web 3000 --family both --port random
+
+# Опубликовать на конкретном порту:
+starry expose shop-web 3000 --port 8080 --proto tcp
+```
+
+---
+
+## 6. Контекстная справка (`starry help`)
+
+Для любой команды и подкоманды Starry доступна интерактивная карточка помощи с синтаксисом, таблицей флагов и примерами:
+
+```bash
+starry help secret
+starry nodes --help
+starry expose -h
 ```
 
 ---

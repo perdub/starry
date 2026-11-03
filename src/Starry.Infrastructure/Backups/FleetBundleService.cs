@@ -3,6 +3,8 @@ using System.IO.Compression;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Starry.Core.Configuration;
+using Starry.Core.Nodes;
+using Starry.Core.Processes;
 using Starry.Infrastructure.Configuration;
 
 namespace Starry.Infrastructure.Backups;
@@ -23,6 +25,16 @@ public static class FleetBundleService
         string bundleOutputPath,
         VirtualConfigEngine? engine = null)
     {
+        ExportBundleAsync(tree, bundleOutputPath, nodes: null, engine).GetAwaiter().GetResult();
+    }
+
+    public static async Task ExportBundleAsync(
+        ConfigTree tree,
+        string bundleOutputPath,
+        IReadOnlyList<INodeConnection>? nodes = null,
+        VirtualConfigEngine? engine = null,
+        CancellationToken ct = default)
+    {
         ArgumentNullException.ThrowIfNull(tree);
         ArgumentException.ThrowIfNullOrWhiteSpace(bundleOutputPath);
 
@@ -32,35 +44,26 @@ public static class FleetBundleService
 
         try
         {
-            // Split configuration into modular folder hierarchy inside staging dir
             configEngine.Split(tree, tempStagingDir, "yaml");
+            WriteBundleManifest(tree, tempStagingDir);
 
-            // Write manifest metadata
-            var clusterName = tree.Root["cluster_name"]?.ToString() ?? "starry-fleet";
-            var nodesList = new List<string>();
-            if (tree.Root["nodes"] is JsonObject nodesObj)
+            if (nodes != null && nodes.Count > 0 && tree.Root["volumes"] is JsonObject volumesObj)
             {
-                nodesList.AddRange(nodesObj.Select(kv => kv.Key));
+                var volDir = Path.Combine(tempStagingDir, "volumes");
+                Directory.CreateDirectory(volDir);
+                foreach (var (volName, _) in volumesObj)
+                {
+                    var targetNode = nodes[0];
+                    var volTarPath = Path.Combine(volDir, $"{volName}.tar.gz");
+                    using var fs = File.Create(volTarPath);
+                    await targetNode.ExecuteStreamingCommandAsync(new ProcessSpec
+                    {
+                        Executable = "sh",
+                        Arguments = ["-c", $"tar -C '/var/lib/docker/volumes/{volName}/_data' -czf - . 2>/dev/null || true"]
+                    }, null, fs, ct).ConfigureAwait(false);
+                }
             }
 
-            var manifestObj = new JsonObject
-            {
-                ["cluster_name"] = clusterName,
-                ["created_at"] = DateTime.UtcNow.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
-                ["starry_version"] = "0.1.0"
-            };
-
-            var nodesArr = new JsonArray();
-            foreach (var node in nodesList)
-            {
-                nodesArr.Add(JsonValue.Create(node));
-            }
-            manifestObj["nodes"] = nodesArr;
-
-            var manifestJson = manifestObj.ToJsonString(IndentedJsonOptions);
-            File.WriteAllText(Path.Combine(tempStagingDir, "manifest.json"), manifestJson);
-
-            // Pack directory into tar.gz
             var outDir = Path.GetDirectoryName(bundleOutputPath);
             if (!string.IsNullOrEmpty(outDir) && !Directory.Exists(outDir))
             {
@@ -69,7 +72,7 @@ public static class FleetBundleService
 
             using var fileStream = File.Create(bundleOutputPath);
             using var gzipStream = new GZipStream(fileStream, CompressionLevel.Optimal);
-            TarFile.CreateFromDirectory(tempStagingDir, gzipStream, includeBaseDirectory: false);
+            await TarFile.CreateFromDirectoryAsync(tempStagingDir, gzipStream, includeBaseDirectory: false, ct).ConfigureAwait(false);
         }
         finally
         {
@@ -78,6 +81,33 @@ public static class FleetBundleService
                 Directory.Delete(tempStagingDir, recursive: true);
             }
         }
+    }
+
+    private static void WriteBundleManifest(ConfigTree tree, string tempStagingDir)
+    {
+        var clusterName = tree.Root["cluster_name"]?.ToString() ?? "starry-fleet";
+        var nodesList = new List<string>();
+        if (tree.Root["nodes"] is JsonObject nodesObj)
+        {
+            nodesList.AddRange(nodesObj.Select(kv => kv.Key));
+        }
+
+        var manifestObj = new JsonObject
+        {
+            ["cluster_name"] = clusterName,
+            ["created_at"] = DateTime.UtcNow.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
+            ["starry_version"] = "0.1.0"
+        };
+
+        var nodesArr = new JsonArray();
+        foreach (var node in nodesList)
+        {
+            nodesArr.Add(JsonValue.Create(node));
+        }
+        manifestObj["nodes"] = nodesArr;
+
+        var manifestJson = manifestObj.ToJsonString(IndentedJsonOptions);
+        File.WriteAllText(Path.Combine(tempStagingDir, "manifest.json"), manifestJson);
     }
 
     public static ConfigTree ImportBundle(

@@ -11,6 +11,7 @@ using Starry.Core.Processes;
 using Starry.Infrastructure.Agent;
 using Starry.Infrastructure.Backups;
 using Starry.Infrastructure.Configuration;
+using Starry.Infrastructure.Diagnostics;
 using Starry.Infrastructure.Localization;
 using Starry.Infrastructure.Network;
 using Starry.Infrastructure.Nodes;
@@ -29,10 +30,34 @@ internal static class Program
         var lang = ExtractOptionValue(args, "--lang");
         ILocalizer localizer = new Localizer(lang);
 
-        if (args.Length == 0 || ContainsHelp(args))
+        if (args.Length == 0)
         {
             RenderHeader(localizer);
             RenderHelp(localizer);
+            return 0;
+        }
+
+        if (string.Equals(args[0], "help", StringComparison.OrdinalIgnoreCase))
+        {
+            if (args.Length == 1)
+            {
+                RenderHeader(localizer);
+                RenderHelp(localizer);
+                return 0;
+            }
+            CliHelpRenderer.RenderCommandHelp(args[1..], localizer);
+            return 0;
+        }
+
+        if (ContainsHelp(args))
+        {
+            if (args.Length == 1)
+            {
+                RenderHeader(localizer);
+                RenderHelp(localizer);
+                return 0;
+            }
+            CliHelpRenderer.RenderCommandHelp(args, localizer);
             return 0;
         }
 
@@ -124,7 +149,10 @@ internal static class Program
             "ADOPT" => HandleAdoptCommandAsync(commandArgs),
             "UNMANAGED" => HandleUnmanagedCommandAsync(commandArgs),
             "CONFIG" => HandleConfigCommand(commandArgs, localizer),
-            "SECRET" => Task.FromResult(HandleSecretCommand(commandArgs)),
+            "SECRET" => HandleSecretCommandAsync(commandArgs),
+            "PORTS" => Task.FromResult(HandlePortsCommand(commandArgs)),
+            "DOMAINS" => Task.FromResult(HandleDomainsCommand(commandArgs)),
+            "EXPOSE" => Task.FromResult(HandleExposeCommand(commandArgs)),
             "ENCRYPT" => HandleEncryptCommand(commandArgs),
             "NODES" => HandleNodesCommand(commandArgs, localizer),
             "ROTATE-KEYS" => HandleRotateKeysDirectCommand(commandArgs),
@@ -254,63 +282,160 @@ internal static class Program
         }
     }
 
-    private static int HandleSecretCommand(string[] args)
+    private static async Task<int> HandleSecretCommandAsync(string[] args)
     {
         var subCommand = args.Length > 0 ? args[0] : "help";
         var subArgs = args.Length > 1 ? args[1..] : Array.Empty<string>();
 
-        if (string.Equals(subCommand, "keygen", StringComparison.OrdinalIgnoreCase))
+        return subCommand.ToLowerInvariant() switch
         {
-            var key = CryptoService.GenerateMasterKeyBase64();
-            AnsiConsole.WriteLine(key);
-            return 0;
+            "keygen" => ExecuteSecretKeygen(),
+            "encrypt" => ExecuteSecretEncrypt(subArgs),
+            "decrypt" => ExecuteSecretDecrypt(subArgs),
+            "update" or "set" => await ExecuteSecretUpdateAsync(subArgs).ConfigureAwait(false),
+            "get" => ExecuteSecretGet(subArgs),
+            "list" => ExecuteSecretList(subArgs),
+            "sync-github" => await ExecuteSecretSyncGithubAsync(subArgs).ConfigureAwait(false),
+            _ => ShowSecretUsage()
+        };
+    }
+
+    private static int ExecuteSecretKeygen()
+    {
+        var key = CryptoService.GenerateMasterKeyBase64();
+        AnsiConsole.WriteLine(key);
+        return 0;
+    }
+
+    private static int ExecuteSecretEncrypt(string[] subArgs)
+    {
+        if (subArgs.Length == 0)
+        {
+            AnsiConsole.MarkupLine("[red]Usage: starry secret encrypt <value> --path <jsonPath> [--key <key>][/]");
+            return 1;
         }
 
-        if (string.Equals(subCommand, "encrypt", StringComparison.OrdinalIgnoreCase))
+        var plainText = subArgs[0];
+        var path = ExtractOptionValue(subArgs, "--path") ?? "secret";
+        var key = ResolveKeyFromArgsOrEnv(subArgs, "--key", "STARRY_MASTER_KEY")
+                  ?? throw new InvalidOperationException("Master key not provided. Set STARRY_MASTER_KEY or pass --key.");
+
+        var crypto = new CryptoService();
+        var envelope = crypto.Encrypt(Encoding.UTF8.GetBytes(plainText), key, path);
+        AnsiConsole.WriteLine(envelope.FormatEncrypted());
+        return 0;
+    }
+
+    private static int ExecuteSecretDecrypt(string[] subArgs)
+    {
+        if (subArgs.Length == 0)
         {
-            if (subArgs.Length == 0)
-            {
-                AnsiConsole.MarkupLine("[red]Usage: starry secret encrypt <value> --path <jsonPath> [--key <key>][/]");
-                return 1;
-            }
-
-            var plainText = subArgs[0];
-            var path = ExtractOptionValue(subArgs, "--path") ?? "secret";
-            var key = ResolveKeyFromArgsOrEnv(subArgs, "--key", "STARRY_MASTER_KEY")
-                      ?? throw new InvalidOperationException("Master key not provided. Set STARRY_MASTER_KEY or pass --key.");
-
-            var crypto = new CryptoService();
-            var envelope = crypto.Encrypt(Encoding.UTF8.GetBytes(plainText), key, path);
-            AnsiConsole.WriteLine(envelope.FormatEncrypted());
-            return 0;
+            AnsiConsole.MarkupLine("[red]Usage: starry secret decrypt <ENC[...]> --path <jsonPath> [--key <key>][/]");
+            return 1;
         }
 
-        if (string.Equals(subCommand, "decrypt", StringComparison.OrdinalIgnoreCase))
+        var encText = subArgs[0];
+        var path = ExtractOptionValue(subArgs, "--path") ?? "secret";
+        var key = ResolveKeyFromArgsOrEnv(subArgs, "--key", "STARRY_MASTER_KEY")
+                  ?? throw new InvalidOperationException("Master key not provided. Set STARRY_MASTER_KEY or pass --key.");
+
+        var crypto = new CryptoService();
+        if (!crypto.TryParseEncrypted(encText, out var envelope) || envelope == null)
         {
-            if (subArgs.Length == 0)
-            {
-                AnsiConsole.MarkupLine("[red]Usage: starry secret decrypt <ENC[...]> --path <jsonPath> [--key <key>][/]");
-                return 1;
-            }
-
-            var encText = subArgs[0];
-            var path = ExtractOptionValue(subArgs, "--path") ?? "secret";
-            var key = ResolveKeyFromArgsOrEnv(subArgs, "--key", "STARRY_MASTER_KEY")
-                      ?? throw new InvalidOperationException("Master key not provided. Set STARRY_MASTER_KEY or pass --key.");
-
-            var crypto = new CryptoService();
-            if (!crypto.TryParseEncrypted(encText, out var envelope) || envelope == null)
-            {
-                AnsiConsole.MarkupLine("[red]Invalid ENC[...] envelope format.[/]");
-                return 1;
-            }
-
-            var decrypted = crypto.Decrypt(envelope, key, path);
-            AnsiConsole.WriteLine(Encoding.UTF8.GetString(decrypted));
-            return 0;
+            AnsiConsole.MarkupLine("[red]Invalid ENC[...] envelope format.[/]");
+            return 1;
         }
 
-        AnsiConsole.MarkupLine("[yellow]Usage: starry secret (keygen|encrypt|decrypt)[/]");
+        var decrypted = crypto.Decrypt(envelope, key, path);
+        AnsiConsole.WriteLine(Encoding.UTF8.GetString(decrypted));
+        return 0;
+    }
+
+    private static async Task<int> ExecuteSecretUpdateAsync(string[] subArgs)
+    {
+        if (subArgs.Length == 0)
+        {
+            AnsiConsole.MarkupLine("[red]Usage: starry secret update <canonical.path> [plaintext_value] [--config <dir>][/]");
+            return 1;
+        }
+
+        var canonicalPath = subArgs[0];
+        var plainText = subArgs.Length > 1 && !subArgs[1].StartsWith('-')
+            ? subArgs[1]
+            : AnsiConsole.Prompt(new TextPrompt<string>("Enter secret:").Secret());
+
+        var configPath = ExtractOptionValue(subArgs, "--config") ?? ".";
+        var key = ResolveKeyFromArgsOrEnv(subArgs, "--key", "STARRY_MASTER_KEY")
+                  ?? MasterKeyResolver.ResolveKey(null, configPath)
+                  ?? throw new InvalidOperationException("Master key not found. Ensure .starry/master.key exists or set STARRY_MASTER_KEY.");
+
+        var engine = new VirtualConfigEngine();
+        var tree = engine.Load(configPath, resolveGraph: false);
+        var manager = new SecretManager();
+        manager.SetSecret(tree, canonicalPath, plainText, key, configPath, engine);
+
+        AnsiConsole.MarkupLine($"[green]✓ Successfully encrypted and updated secret '{Markup.Escape(canonicalPath)}'.[/]");
+        await CheckAndTriggerGitSyncAsync(configPath, subArgs, tree).ConfigureAwait(false);
+        return 0;
+    }
+
+    private static int ExecuteSecretGet(string[] subArgs)
+    {
+        if (subArgs.Length == 0)
+        {
+            AnsiConsole.MarkupLine("[red]Usage: starry secret get <canonical.path> [--config <dir>][/]");
+            return 1;
+        }
+
+        var canonicalPath = subArgs[0];
+        var configPath = ExtractOptionValue(subArgs, "--config") ?? ".";
+        var key = ResolveKeyFromArgsOrEnv(subArgs, "--key", "STARRY_MASTER_KEY")
+                  ?? MasterKeyResolver.ResolveKey(null, configPath)
+                  ?? throw new InvalidOperationException("Master key not found. Ensure .starry/master.key exists or set STARRY_MASTER_KEY.");
+
+        var engine = new VirtualConfigEngine();
+        var tree = engine.Load(configPath, resolveGraph: false);
+        var manager = new SecretManager();
+        var plainText = manager.GetSecret(tree, canonicalPath, key);
+
+        AnsiConsole.WriteLine(plainText);
+        return 0;
+    }
+
+    private static int ExecuteSecretList(string[] subArgs)
+    {
+        var configPath = ExtractOptionValue(subArgs, "--config") ?? ".";
+        var engine = new VirtualConfigEngine();
+        var tree = engine.Load(configPath, resolveGraph: false);
+        var manager = new SecretManager();
+        var secrets = manager.ListSecrets(tree);
+
+        var table = new Table().Border(TableBorder.Rounded).AddColumn("Path").AddColumn("Format").AddColumn("Source File");
+        foreach (var s in secrets)
+        {
+            var formatMarkup = s.IsEncrypted ? "[green]ENC[AES256_GCM][/]" : "[yellow]PLAIN[/]";
+            table.AddRow(s.Path, formatMarkup, s.SourceFile ?? "-");
+        }
+
+        AnsiConsole.Write(table);
+        return 0;
+    }
+
+    private static async Task<int> ExecuteSecretSyncGithubAsync(string[] subArgs)
+    {
+        var secretName = ExtractOptionValue(subArgs, "--name") ?? "STARRY_MASTER_KEY";
+        var configPath = ExtractOptionValue(subArgs, "--config") ?? ".";
+        var key = ResolveKeyFromArgsOrEnv(subArgs, "--key", "STARRY_MASTER_KEY")
+                  ?? MasterKeyResolver.ResolveKey(null, configPath)
+                  ?? throw new InvalidOperationException("Master key not found. Set STARRY_MASTER_KEY or run in initialized repository.");
+
+        await UpdateGitHubSecretAsync(secretName, Convert.ToBase64String(key)).ConfigureAwait(false);
+        return 0;
+    }
+
+    private static int ShowSecretUsage()
+    {
+        AnsiConsole.MarkupLine("[yellow]Usage: starry secret (update|get|list|sync-github|keygen|encrypt|decrypt)[/]");
         return 0;
     }
 
@@ -392,7 +517,24 @@ internal static class Program
                 }
             }
 
-            return new AgentOptions { InternalDnsRecords = internalRecords };
+            var backupPolicies = new List<BackupPolicy>();
+            if (tree.Root["volumes"] is JsonObject volumesObj)
+            {
+                foreach (var (volName, volVal) in volumesObj)
+                {
+                    var path = volVal?["path"]?.ToString() ?? $"/var/lib/docker/volumes/{volName}/_data";
+                    backupPolicies.Add(new BackupPolicy(
+                        ServiceName: volName,
+                        VolumePath: path,
+                        Interval: TimeSpan.FromHours(24)));
+                }
+            }
+
+            return new AgentOptions
+            {
+                InternalDnsRecords = internalRecords,
+                BackupPolicies = backupPolicies
+            };
         }
         catch (Exception)
         {
@@ -601,7 +743,7 @@ internal static class Program
         try
         {
             var engine = new VirtualConfigEngine();
-            var tree = engine.Load(targetPath);
+            var tree = engine.Load(targetPath, resolveGraph: false);
             var manager = new SecretManager();
             var encryptedCount = manager.EncryptOpenSecrets(tree, key, targetPath, engine);
 
@@ -635,7 +777,7 @@ internal static class Program
         try
         {
             var engine = new VirtualConfigEngine();
-            var tree = engine.Load(targetPath);
+            var tree = engine.Load(targetPath, resolveGraph: false);
             var manager = new SecretManager();
             var count = manager.ReencryptAll(tree, oldKey, newKey, targetPath, engine);
 
@@ -846,6 +988,11 @@ internal static class Program
         if (string.Equals(subCommand, "interfaces", StringComparison.OrdinalIgnoreCase))
         {
             return await ExecuteNetInterfacesAsync(subArgs).ConfigureAwait(false);
+        }
+
+        if (string.Equals(subCommand, "doctor", StringComparison.OrdinalIgnoreCase))
+        {
+            return await ExecuteNodesDoctorAsync(subArgs).ConfigureAwait(false);
         }
 
         AnsiConsole.MarkupLine($"[yellow]starry nodes[/] - [grey]{Markup.Escape(localizer.GetString(LocalizationKeys.NodesCommandDescription))}[/]");
@@ -1119,6 +1266,7 @@ internal static class Program
                 AnsiConsole.MarkupLine($"[yellow]No master key specified. Generated STARRY_MASTER_KEY for rotated keys:[/] [bold green]{newKeyStr}[/]");
             }
 
+            var randomizePorts = args.Any(a => string.Equals(a, "--randomize-ports", StringComparison.OrdinalIgnoreCase));
             var secretManager = new SecretManager();
 
             foreach (var target in targets)
@@ -1128,11 +1276,7 @@ internal static class Program
                     continue;
                 }
 
-                await using var conn = await orchestrator.ResolveNodeConnectionAsync(target, nodeObj).ConfigureAwait(false);
-                var newPrivateKey = await NodeOperationsService.RotateSshKeysAsync(conn, oldPubKey, msg => AnsiConsole.MarkupLine($"[grey]  > {Markup.Escape(msg)}[/]")).ConfigureAwait(false);
-
-                nodeObj["ssh_key"] = $"PLAIN[{newPrivateKey}]";
-                secretManager.EncryptOpenSecrets(tree, masterKey, configPath, engine);
+                await RotateSingleNodeKeyAsync(target, nodeObj, oldPubKey, randomizePorts, masterKey, configPath, tree, orchestrator, secretManager).ConfigureAwait(false);
             }
 
             AnsiConsole.MarkupLine($"[bold green]✓ Successfully rotated SSH keys for {targets.Count} node(s) and updated configuration![/]");
@@ -1144,6 +1288,169 @@ internal static class Program
             AnsiConsole.MarkupLine($"[red]SSH key rotation failed: {Markup.Escape(ex.Message)}[/]");
             return 1;
         }
+    }
+
+    private static async Task RotateSingleNodeKeyAsync(
+        string target,
+        JsonObject nodeObj,
+        string oldPubKey,
+        bool randomizePorts,
+        byte[] masterKey,
+        string configPath,
+        ConfigTree tree,
+        ClusterOrchestrator orchestrator,
+        SecretManager secretManager)
+    {
+        await using var conn = await orchestrator.ResolveNodeConnectionAsync(target, nodeObj).ConfigureAwait(false);
+        var newPrivateKey = await NodeOperationsService.RotateSshKeysAsync(conn, oldPubKey, msg => AnsiConsole.MarkupLine($"[grey]  > {Markup.Escape(msg)}[/]")).ConfigureAwait(false);
+
+        nodeObj["ssh_key"] = $"PLAIN[{newPrivateKey}]";
+
+        if (randomizePorts)
+        {
+            var curPort = conn.Port > 0 ? conn.Port : 22;
+            var newPort = await PortRandomizerService.MigrateSshPortSafelyAsync(conn, curPort, null, msg => AnsiConsole.MarkupLine($"[grey]  > {Markup.Escape(msg)}[/]")).ConfigureAwait(false);
+            nodeObj["port"] = newPort;
+        }
+
+        secretManager.EncryptOpenSecrets(tree, masterKey, configPath, new VirtualConfigEngine());
+    }
+
+    private static async Task<int> ExecuteNodesDoctorAsync(string[] args)
+    {
+        var configPath = ExtractOptionValue(args, "--config") ?? ".";
+        var fix = args.Any(a => string.Equals(a, "--fix", StringComparison.OrdinalIgnoreCase));
+        var targetNodeArg = args.FirstOrDefault(a => !a.StartsWith('-'));
+
+        try
+        {
+            var engine = new VirtualConfigEngine();
+            var tree = engine.Load(configPath);
+            var orchestrator = new ClusterOrchestrator();
+            var nodes = await orchestrator.ResolveNodesAsync(tree).ConfigureAwait(false);
+
+            if (nodes.Count == 0)
+            {
+                AnsiConsole.MarkupLine("[yellow]No active node connections found in configuration.[/]");
+                return 0;
+            }
+
+            var selectedNodes = string.IsNullOrEmpty(targetNodeArg)
+                ? nodes
+                : nodes.Where(n => string.Equals(n.NodeName, targetNodeArg, StringComparison.OrdinalIgnoreCase)).ToList();
+
+            foreach (var node in selectedNodes)
+            {
+                AnsiConsole.MarkupLine($"\n[bold yellow]═══ Pre-Flight Doctor: '{Markup.Escape(node.NodeName)}' ({Markup.Escape(node.Host)}) ═══[/]");
+                var checks = await HostPreflightInspector.RunDiagnosticsAsync(node, fix).ConfigureAwait(false);
+
+                var table = new Table().Border(TableBorder.Rounded).AddColumn("Check").AddColumn("Status").AddColumn("Details");
+                foreach (var c in checks)
+                {
+                    string status;
+                    if (c.Passed)
+                    {
+                        status = c.WasFixed ? "[bold green]FIXED[/]" : "[green]PASS[/]";
+                    }
+                    else
+                    {
+                        status = "[red]FAIL[/]";
+                    }
+                    table.AddRow(c.CheckName, status, c.Details);
+                }
+                AnsiConsole.Write(table);
+            }
+
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]Doctor preflight failed: {Markup.Escape(ex.Message)}[/]");
+            return 1;
+        }
+    }
+
+    private static int HandlePortsCommand(string[] args)
+    {
+        var configPath = ExtractOptionValue(args, "--config") ?? ".";
+        var engine = new VirtualConfigEngine();
+        var tree = engine.Load(configPath);
+
+        var ports = DomainEndpointAllocator.ListPorts(tree);
+        var table = new Table().Border(TableBorder.Rounded)
+            .AddColumn("Rule Name")
+            .AddColumn("From")
+            .AddColumn("To")
+            .AddColumn("Proto")
+            .AddColumn("Family");
+
+        foreach (var p in ports)
+        {
+            table.AddRow(p.RuleName, p.From, p.To, p.Protocol, p.Family);
+        }
+
+        AnsiConsole.Write(table);
+        return 0;
+    }
+
+    private static int HandleDomainsCommand(string[] args)
+    {
+        var configPath = ExtractOptionValue(args, "--config") ?? ".";
+        var engine = new VirtualConfigEngine();
+        var tree = engine.Load(configPath);
+
+        var routes = DomainRoutingService.TraverseDomains(tree);
+        var table = new Table().Border(TableBorder.Rounded)
+            .AddColumn("Hostname")
+            .AddColumn("Zone")
+            .AddColumn("Target")
+            .AddColumn("Node")
+            .AddColumn("Entry Port");
+
+        foreach (var r in routes)
+        {
+            var target = !string.IsNullOrEmpty(r.SniTarget) ? $"sni://{r.SniTarget}" : (r.HttpTarget ?? "-");
+            table.AddRow(r.FullHostname, r.ZoneDomain, target, r.TargetNode ?? "auto", r.EntryPort.ToString(CultureInfo.InvariantCulture));
+        }
+
+        AnsiConsole.Write(table);
+        return 0;
+    }
+
+    private static int HandleExposeCommand(string[] args)
+    {
+        if (args.Length < 2)
+        {
+            AnsiConsole.MarkupLine("[red]Usage: starry expose <service> <targetPort> [--family ipv4|ipv6|both] [--port <num|random>] [--proto tcp|udp] [--rule-name <name>] [--config <dir>][/]");
+            return 1;
+        }
+
+        var service = args[0];
+        if (!int.TryParse(args[1], CultureInfo.InvariantCulture, out var targetPort))
+        {
+            AnsiConsole.MarkupLine($"[red]Invalid target port: {Markup.Escape(args[1])}[/]");
+            return 1;
+        }
+
+        var configPath = ExtractOptionValue(args, "--config") ?? ".";
+        var family = ExtractOptionValue(args, "--family") ?? "both";
+        var proto = ExtractOptionValue(args, "--proto") ?? "tcp";
+        var portStr = ExtractOptionValue(args, "--port");
+        var ruleName = ExtractOptionValue(args, "--rule-name") ?? $"{service}-{targetPort}";
+
+        int? requestedPort = null;
+        if (!string.IsNullOrEmpty(portStr) && !string.Equals(portStr, "random", StringComparison.OrdinalIgnoreCase) && int.TryParse(portStr, CultureInfo.InvariantCulture, out var p))
+        {
+            requestedPort = p;
+        }
+
+        var engine = new VirtualConfigEngine();
+        var tree = engine.Load(configPath, resolveGraph: false);
+        var allocated = DomainEndpointAllocator.ExposeService(tree, ruleName, service, targetPort, family, requestedPort, proto);
+
+        engine.Split(tree, configPath, "yaml");
+        AnsiConsole.MarkupLine($"[bold green]✓ Successfully exposed service '{Markup.Escape(service)}' on '{Markup.Escape(allocated.From)}' -> '{Markup.Escape(allocated.To)}'[/]");
+        return 0;
     }
 
     private static async Task<int> HandlePlanCommand(string[] args)

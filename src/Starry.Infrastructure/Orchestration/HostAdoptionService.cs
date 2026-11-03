@@ -917,17 +917,10 @@ public sealed class HostAdoptionService : IHostAdoptionService
             return key;
         }
 
-        var envKey = Environment.GetEnvironmentVariable("STARRY_MASTER_KEY");
-        if (!string.IsNullOrWhiteSpace(envKey))
+        var resolved = MasterKeyResolver.ResolveKey(null, options.OutDir);
+        if (resolved != null)
         {
-            try
-            {
-                return CryptoService.ParseMasterKey(envKey);
-            }
-            catch (FormatException)
-            {
-                // Fallback to generating a fresh key
-            }
+            return resolved;
         }
 
         return CryptoService.ParseMasterKey(CryptoService.GenerateMasterKeyBase64());

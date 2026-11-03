@@ -190,8 +190,13 @@ public sealed class StarryAgentDaemon : IAsyncDisposable
     /// Executes a single health monitoring and reconciliation cycle.
     /// Detects stopped/exited managed containers and restarts them via Docker/Podman socket API.
     /// </summary>
+    public Task<int> PerformHealthCheckAndReconcileAsync(CancellationToken ct = default)
+    {
+        return PerformHealthCheckAndReconcileAsync(options: null, ct);
+    }
+
     [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "Loop must continue if container listing fails")]
-    public async Task<int> PerformHealthCheckAndReconcileAsync(CancellationToken ct = default)
+    public async Task<int> PerformHealthCheckAndReconcileAsync(AgentOptions? options, CancellationToken ct = default)
     {
         _logger?.Invoke("Performing container drift detection...");
 
@@ -215,7 +220,79 @@ public sealed class StarryAgentDaemon : IAsyncDisposable
             }
         }
 
+        if (options != null)
+        {
+            restartedCount += await ReconcileDesiredServicesAsync(options.DesiredServices, containers, ct).ConfigureAwait(false);
+            await ReconcileNftablesAsync(options.DesiredNftablesRuleset, ct).ConfigureAwait(false);
+        }
+
         return restartedCount;
+    }
+
+    private async Task<int> ReconcileDesiredServicesAsync(
+        IReadOnlyList<ServiceSpec> desiredServices,
+        IReadOnlyList<ContainerState> containers,
+        CancellationToken ct)
+    {
+        var restoredCount = 0;
+        foreach (var desired in desiredServices)
+        {
+            var match = containers.FirstOrDefault(c => string.Equals(c.Name, desired.Name, StringComparison.OrdinalIgnoreCase));
+            var desiredHash = BaseSocketContainerRuntime.ComputeSpecHash(desired);
+            var missingOrDrifted = match == null || !match.IsRunning ||
+                (match.Labels.TryGetValue("starry.spec.hash", out var h) && !string.Equals(h, desiredHash, StringComparison.Ordinal));
+
+            if (missingOrDrifted)
+            {
+                _logger?.Invoke($"Restoring missing/drifted desired service '{desired.Name}'...");
+                try
+                {
+                    await _runtime.DeployContainerAsync(_nodeConnection, desired, ct).ConfigureAwait(false);
+                    RecordDriftEvent(new DriftEvent(
+                        ContainerId: match?.Id ?? string.Empty,
+                        ContainerName: desired.Name,
+                        Reason: "Desired service missing or spec hash drifted",
+                        TimestampUtc: DateTime.UtcNow,
+                        RestartTriggered: true,
+                        RestartSucceeded: true,
+                        Details: "Successfully reconciled container"));
+                    restoredCount++;
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    RecordDriftEvent(new DriftEvent(
+                        ContainerId: match?.Id ?? string.Empty,
+                        ContainerName: desired.Name,
+                        Reason: $"Reconciliation failed: {ex.Message}",
+                        TimestampUtc: DateTime.UtcNow,
+                        RestartTriggered: true,
+                        RestartSucceeded: false,
+                        Details: ex.ToString()));
+                }
+            }
+        }
+        return restoredCount;
+    }
+
+    private async Task ReconcileNftablesAsync(string? desiredRuleset, CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(desiredRuleset))
+        {
+            return;
+        }
+
+        var checkSpec = new ProcessSpec
+        {
+            Executable = "nft",
+            Arguments = ["list", "table", "inet", "starry"]
+        };
+
+        var checkRes = await _nodeConnection.ExecuteCommandAsync(checkSpec, ct).ConfigureAwait(false);
+        if (!checkRes.IsSuccess)
+        {
+            _logger?.Invoke("Table 'inet starry' missing in nftables; reapplying desired ruleset...");
+            await NftablesService.ApplyRulesetAsync(_nodeConnection, desiredRuleset, ct).ConfigureAwait(false);
+        }
     }
 
     [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "Daemon must record failed restarts without throwing")]
@@ -397,7 +474,7 @@ public sealed class StarryAgentDaemon : IAsyncDisposable
 
         try
         {
-            await PerformHealthCheckAndReconcileAsync(ct).ConfigureAwait(false);
+            await PerformHealthCheckAndReconcileAsync(options, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -425,7 +502,7 @@ public sealed class StarryAgentDaemon : IAsyncDisposable
                     break;
                 }
 
-                await PerformHealthCheckAndReconcileAsync(ct).ConfigureAwait(false);
+                await PerformHealthCheckAndReconcileAsync(options, ct).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {

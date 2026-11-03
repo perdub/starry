@@ -8,6 +8,7 @@ namespace Starry.Core.Backups;
 public interface IBackupStorageProvider
 {
     string TypeName { get; }
+    Task<bool> HasBackupAsync(INodeConnection node, string backupId, CancellationToken ct = default);
     Task StreamBackupAsync(INodeConnection node, string volumePath, string backupId, CancellationToken ct = default);
     Task StreamRestoreAsync(INodeConnection node, string backupId, string targetVolumePath, CancellationToken ct = default);
 }

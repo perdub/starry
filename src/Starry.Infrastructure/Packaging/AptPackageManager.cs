@@ -102,6 +102,8 @@ public sealed class AptPackageManager : IOsPackageManager
             "curl" => "curl",
             "rsync" => "rsync",
             "zstd" => "zstd",
+            "docker" => "docker.io",
+            "podman" => "podman",
             _ => logicalPackage
         };
     }

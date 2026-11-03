@@ -20,6 +20,23 @@ public sealed class RcloneBackupStorageProvider : IBackupStorageProvider
         _remoteDestination = remoteDestination.TrimEnd('/');
     }
 
+    public async Task<bool> HasBackupAsync(INodeConnection node, string backupId, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(node);
+        ArgumentException.ThrowIfNullOrWhiteSpace(backupId);
+
+        var remoteTarget = $"{_remoteDestination}/{backupId}.tar.zst";
+        var spec = new ProcessSpec
+        {
+            Executable = "rclone",
+            Arguments = ["size", remoteTarget],
+            Timeout = TimeSpan.FromSeconds(10)
+        };
+
+        var result = await node.ExecuteCommandAsync(spec, ct).ConfigureAwait(false);
+        return result.IsSuccess && !result.StandardOutput.Contains("Total objects: 0", StringComparison.OrdinalIgnoreCase);
+    }
+
     public async Task StreamBackupAsync(
         INodeConnection node,
         string volumePath,

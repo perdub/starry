@@ -9,6 +9,8 @@ public sealed record AgentOptions
     public IReadOnlyDictionary<string, string> InternalDnsRecords { get; init; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
     public TimeSpan HealthCheckInterval { get; init; } = TimeSpan.FromSeconds(30);
     public IReadOnlyList<BackupPolicy> BackupPolicies { get; init; } = [];
+    public IReadOnlyList<Starry.Core.Containers.ServiceSpec> DesiredServices { get; init; } = [];
+    public string? DesiredNftablesRuleset { get; init; }
     public string? NodeName { get; init; }
 
     public AgentOptions WithDnsRecord(string domain, string ip)

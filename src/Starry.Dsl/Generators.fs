@@ -130,8 +130,10 @@ module Generators =
         sb.AppendLine("    chain forward {") |> ignore
         sb.AppendLine("        type filter hook forward priority filter; policy drop;") |> ignore
         sb.AppendLine("        ct state established,related accept") |> ignore
-        sb.AppendLine("        iifname \"starry0\" oifname \"starry0\" ip6 saddr . ip6 daddr @allowed_mesh_pairs accept") |> ignore
-        sb.AppendLine("        iifname \"starry0\" oifname \"starry0\" accept") |> ignore
+        if allowedSubnetPairs.Length > 0 then
+            sb.AppendLine("        iifname \"starry0\" oifname \"starry0\" ip6 saddr . ip6 daddr @allowed_mesh_pairs accept") |> ignore
+        else
+            sb.AppendLine("        iifname \"starry0\" oifname \"starry0\" accept") |> ignore
         sb.AppendLine("        iifname \"starry0\" accept") |> ignore
         sb.AppendLine("        oifname \"starry0\" accept") |> ignore
         sb.AppendLine("    }") |> ignore
@@ -144,13 +146,23 @@ module Generators =
             let proto = rule.Protocol.ToLowerInvariant()
             let protoList = if proto = "both" then [ "tcp"; "udp" ] else [ proto ]
             for p in protoList do
+                let isTargetIpv6 = rule.TargetIpv6.Contains(":")
                 match rule.AddressFamily.ToLowerInvariant() with
                 | "ipv4" ->
-                    sb.AppendLine(sprintf "        meta nfproto ipv4 %s dport %d dnat to [%s]:%d" p rule.HostPort rule.TargetIpv6 rule.TargetPort) |> ignore
+                    if isTargetIpv6 then
+                        ()
+                    else
+                        sb.AppendLine(sprintf "        meta nfproto ipv4 %s dport %d dnat ip to %s:%d" p rule.HostPort rule.TargetIpv6 rule.TargetPort) |> ignore
                 | "ipv6" ->
-                    sb.AppendLine(sprintf "        meta nfproto ipv6 %s dport %d dnat to [%s]:%d" p rule.HostPort rule.TargetIpv6 rule.TargetPort) |> ignore
+                    if isTargetIpv6 then
+                        sb.AppendLine(sprintf "        meta nfproto ipv6 %s dport %d dnat ip6 to [%s]:%d" p rule.HostPort rule.TargetIpv6 rule.TargetPort) |> ignore
+                    else
+                        sb.AppendLine(sprintf "        meta nfproto ipv6 %s dport %d dnat ip to %s:%d" p rule.HostPort rule.TargetIpv6 rule.TargetPort) |> ignore
                 | _ ->
-                    sb.AppendLine(sprintf "        %s dport %d dnat to [%s]:%d" p rule.HostPort rule.TargetIpv6 rule.TargetPort) |> ignore
+                    if isTargetIpv6 then
+                        sb.AppendLine(sprintf "        meta nfproto ipv6 %s dport %d dnat ip6 to [%s]:%d" p rule.HostPort rule.TargetIpv6 rule.TargetPort) |> ignore
+                    else
+                        sb.AppendLine(sprintf "        %s dport %d dnat to %s:%d" p rule.HostPort rule.TargetIpv6 rule.TargetPort) |> ignore
         sb.AppendLine("    }") |> ignore
         sb.AppendLine() |> ignore
 

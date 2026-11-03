@@ -225,6 +225,25 @@ public sealed class VirtualConfigEngine
             var relInsideFiles = Path.GetRelativePath(filesDir, rf).Replace('\\', '/');
             var content = File.ReadAllText(rf);
             filesObj[relInsideFiles] = JsonValue.Create(content);
+
+            var segments = relInsideFiles.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            var current = filesObj;
+            for (var i = 0; i < segments.Length - 1; i++)
+            {
+                var seg = segments[i];
+                if (!current.TryGetPropertyValue(seg, out var next) || next is not JsonObject nextObj)
+                {
+                    nextObj = new JsonObject();
+                    current[seg] = nextObj;
+                }
+                current = nextObj;
+            }
+            if (segments.Length > 0)
+            {
+                current[segments[^1]] = JsonValue.Create(content);
+            }
+
+            tree.RegisterSource($"files.{relInsideFiles.Replace('/', '.')}", new SourceMapEntry($"files.{relInsideFiles.Replace('/', '.')}", rel));
             tree.RegisterSource($"files.{relInsideFiles}", new SourceMapEntry($"files.{relInsideFiles}", rel));
         }
     }
@@ -258,6 +277,7 @@ public sealed class VirtualConfigEngine
         foreach (var (propName, propVal) in obj)
         {
             var currentPath = string.IsNullOrEmpty(prefix) ? propName : $"{prefix}.{propName}";
+            tree.RegisterSource(currentPath, new SourceMapEntry(currentPath, filePath));
             if (propVal is JsonObject childObj)
             {
                 PopulateObjectIntoTree(tree, childObj, currentPath, filePath);
@@ -370,11 +390,26 @@ public sealed class VirtualConfigEngine
     private static void WriteRawFilesSubtree(string filesDir, JsonObject filesObj)
     {
         Directory.CreateDirectory(filesDir);
-        foreach (var (name, contentVal) in filesObj)
+        WriteRawFilesSubtreeRecursive(filesDir, filesObj, string.Empty);
+    }
+
+    private static void WriteRawFilesSubtreeRecursive(string baseDir, JsonObject currentObj, string currentRel)
+    {
+        foreach (var (name, val) in currentObj)
         {
-            if (contentVal is JsonValue jv)
+            if (name.Contains('/', StringComparison.Ordinal))
             {
-                var filePath = Path.Combine(filesDir, name);
+                continue;
+            }
+
+            var nextRel = string.IsNullOrEmpty(currentRel) ? name : $"{currentRel}/{name}";
+            if (val is JsonObject nestedObj)
+            {
+                WriteRawFilesSubtreeRecursive(baseDir, nestedObj, nextRel);
+            }
+            else if (val is JsonValue jv)
+            {
+                var filePath = Path.Combine(baseDir, nextRel.Replace('/', Path.DirectorySeparatorChar));
                 var pDir = Path.GetDirectoryName(filePath);
                 if (!string.IsNullOrEmpty(pDir))
                 {

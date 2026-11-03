@@ -21,7 +21,53 @@ public static class RepositoryInitializer
         WriteDefaultConfigs(targetDir, projectName);
 
         var masterKey = CryptoService.GenerateMasterKeyBase64();
+        SaveMasterKeyFile(targetDir, masterKey);
+        TrySyncMasterKeyToGitHub(masterKey);
         return (masterKey, targetDir);
+    }
+
+    private static void SaveMasterKeyFile(string targetDir, string masterKey)
+    {
+        var starryDir = Path.Combine(targetDir, ".starry");
+        Directory.CreateDirectory(starryDir);
+        var keyPath = Path.Combine(starryDir, "master.key");
+        File.WriteAllText(keyPath, masterKey.Trim() + "\n");
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(keyPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+    }
+
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "Best effort GitHub CLI secret push")]
+    private static void TrySyncMasterKeyToGitHub(string masterKey)
+    {
+        try
+        {
+            var runner = new Starry.Infrastructure.Processes.ProcessRunner();
+            var gitRes = runner.RunAsync(new Starry.Core.Processes.ProcessSpec
+            {
+                Executable = "git",
+                Arguments = ["remote", "-v"],
+                Timeout = TimeSpan.FromSeconds(2)
+            }).GetAwaiter().GetResult();
+
+            if (!gitRes.IsSuccess || string.IsNullOrWhiteSpace(gitRes.StandardOutput))
+            {
+                return;
+            }
+
+            runner.RunAsync(new Starry.Core.Processes.ProcessSpec
+            {
+                Executable = "gh",
+                Arguments = ["secret", "set", "STARRY_MASTER_KEY"],
+                StandardInputBytes = System.Text.Encoding.UTF8.GetBytes(masterKey),
+                Timeout = TimeSpan.FromSeconds(5)
+            }).GetAwaiter().GetResult();
+        }
+        catch
+        {
+            // gh or git not available or timed out
+        }
     }
 
     private static void CreateDirectories(string targetDir)
