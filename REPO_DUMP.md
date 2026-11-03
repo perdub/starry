@@ -3,8 +3,8 @@
 ## Overview
 
 - **Total Files**: 160
-- **Total Lines of Code**: 22155
-- **Total Size**: 840.5 KB
+- **Total Lines of Code**: 22169
+- **Total Size**: 841.0 KB
 - **Root Directory**: `/root/src/starry`
 
 ## Repository Structure
@@ -12597,7 +12597,7 @@ public sealed class YamlConfigFormatProvider : IConfigFormatProvider
 
 ## File: src/Starry.Infrastructure/Containers/BaseSocketContainerRuntime.cs
 
-**Lines**: 478 | **Size**: 18.6 KB | **Language**: csharp
+**Lines**: 492 | **Size**: 19.0 KB | **Language**: csharp
 
 ```csharp
 using System.Globalization;
@@ -12920,6 +12920,13 @@ public abstract class BaseSocketContainerRuntime : IContainerRuntime
             ["HostConfig"] = hostConfig
         };
 
+        ApplyContainerProcessSpecs(spec, payload);
+
+        return payload;
+    }
+
+    private static void ApplyContainerProcessSpecs(ServiceSpec spec, JsonObject payload)
+    {
         if (!string.IsNullOrEmpty(spec.Command))
         {
             payload["Cmd"] = new JsonArray(JsonValue.Create("sh"), JsonValue.Create("-c"), JsonValue.Create(spec.Command));
@@ -12930,8 +12937,6 @@ public abstract class BaseSocketContainerRuntime : IContainerRuntime
         if (!string.IsNullOrEmpty(spec.Domainname)) payload["Domainname"] = spec.Domainname;
         if (!string.IsNullOrEmpty(spec.StopSignal)) payload["StopSignal"] = spec.StopSignal;
         if (spec.StopGracePeriod.HasValue) payload["StopTimeout"] = spec.StopGracePeriod.Value;
-
-        return payload;
     }
 
     private static JsonObject BuildHostConfig(ServiceSpec spec, JsonArray binds, JsonObject portBindings)
@@ -12944,6 +12949,24 @@ public abstract class BaseSocketContainerRuntime : IContainerRuntime
             ["Privileged"] = spec.Privileged
         };
 
+        ApplyCapAddDrop(spec, hostConfig);
+        ApplyResourceLimits(spec, hostConfig);
+
+        if (!string.IsNullOrEmpty(spec.NetworkMode)) hostConfig["NetworkMode"] = spec.NetworkMode;
+        if (spec.ShmSize.HasValue) hostConfig["ShmSize"] = spec.ShmSize.Value;
+
+        if (spec.Sysctls.Count > 0)
+        {
+            var sysctls = new JsonObject();
+            foreach (var (k, v) in spec.Sysctls) sysctls[k] = v;
+            hostConfig["Sysctls"] = sysctls;
+        }
+
+        return hostConfig;
+    }
+
+    private static void ApplyCapAddDrop(ServiceSpec spec, JsonObject hostConfig)
+    {
         if (spec.CapAdd.Count > 0)
         {
             var capAdd = new JsonArray();
@@ -12957,10 +12980,10 @@ public abstract class BaseSocketContainerRuntime : IContainerRuntime
             foreach (var c in spec.CapDrop) capDrop.Add(JsonValue.Create(c));
             hostConfig["CapDrop"] = capDrop;
         }
+    }
 
-        if (!string.IsNullOrEmpty(spec.NetworkMode)) hostConfig["NetworkMode"] = spec.NetworkMode;
-        if (spec.ShmSize.HasValue) hostConfig["ShmSize"] = spec.ShmSize.Value;
-
+    private static void ApplyResourceLimits(ServiceSpec spec, JsonObject hostConfig)
+    {
         var memBytes = ParseMemoryLimitBytes(spec.MemLimit);
         if (memBytes.HasValue) hostConfig["Memory"] = memBytes.Value;
 
@@ -12968,15 +12991,6 @@ public abstract class BaseSocketContainerRuntime : IContainerRuntime
         {
             hostConfig["NanoCpus"] = (long)(spec.Cpus.Value * 1_000_000_000);
         }
-
-        if (spec.Sysctls.Count > 0)
-        {
-            var sysctls = new JsonObject();
-            foreach (var (k, v) in spec.Sysctls) sysctls[k] = v;
-            hostConfig["Sysctls"] = sysctls;
-        }
-
-        return hostConfig;
     }
 
     private static long? ParseMemoryLimitBytes(string? memLimit)
