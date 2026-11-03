@@ -71,7 +71,7 @@ jobs:
             pkg: "dnf install -y --allowerasing wireguard-tools nftables"
           - distro: "Alpine 3.20"
             image: "alpine:3.20"
-            pkg: "apk add --no-cache curl wireguard-tools nftables gcompat"
+            pkg: "apk add --no-cache curl wireguard-tools nftables gcompat libstdc++"
           - distro: "Arch Linux"
             image: "archlinux:latest"
             pkg: "pacman -Sy --noconfirm which curl wireguard-tools nftables"
