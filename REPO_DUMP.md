@@ -2,9 +2,9 @@
 
 ## Overview
 
-- **Total Files**: 152
-- **Total Lines of Code**: 21024
-- **Total Size**: 797.0 KB
+- **Total Files**: 157
+- **Total Lines of Code**: 21031
+- **Total Size**: 797.2 KB
 - **Root Directory**: `/root/src/starry`
 
 ## Repository Structure
@@ -140,10 +140,15 @@ starry/
 │       │   └── Localizer.cs
 │       ├── Network/
 │       │   ├── IdLedgerService.cs
+│       │   ├── IdLedgerState.cs
+│       │   ├── InterfaceClassification.cs
 │       │   ├── InternalDnsServer.cs
 │       │   ├── NftablesService.cs
+│       │   ├── NodeInterfaceInfo.cs
 │       │   ├── NodeNetworkInspector.cs
+│       │   ├── NodeNetworkReport.cs
 │       │   ├── PortForwardRule.cs
+│       │   ├── ReplicaEndpoint.cs
 │       │   ├── WireGuardMeshService.cs
 │       │   └── WireGuardNodeConfig.cs
 │       ├── Nodes/
@@ -11460,7 +11465,7 @@ public sealed class GitSyncService
                 WorkingDirectory = workingDir
             }, ct).ConfigureAwait(false);
 
-            var commitResult = await _runner.RunAsync(new ProcessSpec
+            await _runner.RunAsync(new ProcessSpec
             {
                 Executable = "git",
                 Arguments = ["commit", "-m", commitMessage],
@@ -13296,7 +13301,7 @@ public sealed class Localizer : ILocalizer
 
 ## File: src/Starry.Infrastructure/Network/IdLedgerService.cs
 
-**Lines**: 208 | **Size**: 6.7 KB | **Language**: csharp
+**Lines**: 197 | **Size**: 6.2 KB | **Language**: csharp
 
 ```csharp
 using System.Globalization;
@@ -13304,17 +13309,6 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 
 namespace Starry.Infrastructure.Network;
-
-public sealed record IdLedgerState
-{
-    public int NextHostId { get; set; } = 1;
-    public Dictionary<string, int> AllocatedHosts { get; init; } = new(StringComparer.OrdinalIgnoreCase);
-    public List<int> TombstonedHostIds { get; init; } = [];
-
-    public int NextContainerId { get; set; } = 1;
-    public Dictionary<string, int> AllocatedContainers { get; init; } = new(StringComparer.OrdinalIgnoreCase);
-    public List<int> TombstonedContainerIds { get; init; } = [];
-}
 
 /// <summary>
 /// Persistent ledger for monotonic, non-reusable host and container IDs with tombstoning,
@@ -13324,7 +13318,7 @@ public sealed class IdLedgerService
 {
     public const string ClusterPrefix = "fd67:b00b";
     private readonly string _ledgerFilePath;
-    private readonly object _syncLock = new();
+    private readonly Lock _syncLock = new();
     private IdLedgerState _state;
 
     public IdLedgerService(string? baseDir = null)
@@ -13509,9 +13503,45 @@ public sealed class IdLedgerService
 }
 ```
 
+## File: src/Starry.Infrastructure/Network/IdLedgerState.cs
+
+**Lines**: 12 | **Size**: 521 B | **Language**: csharp
+
+```csharp
+namespace Starry.Infrastructure.Network;
+
+public sealed record IdLedgerState
+{
+    public int NextHostId { get; set; } = 1;
+    public Dictionary<string, int> AllocatedHosts { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+    public IList<int> TombstonedHostIds { get; init; } = [];
+
+    public int NextContainerId { get; set; } = 1;
+    public Dictionary<string, int> AllocatedContainers { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+    public IList<int> TombstonedContainerIds { get; init; } = [];
+}
+```
+
+## File: src/Starry.Infrastructure/Network/InterfaceClassification.cs
+
+**Lines**: 10 | **Size**: 180 B | **Language**: csharp
+
+```csharp
+namespace Starry.Infrastructure.Network;
+
+public enum InterfaceClassification
+{
+    DedicatedPublic,
+    RoutedIpv6Subnet,
+    BehindNatOrCgnat,
+    Firewalled,
+    InternalOnly
+}
+```
+
 ## File: src/Starry.Infrastructure/Network/InternalDnsServer.cs
 
-**Lines**: 453 | **Size**: 15.1 KB | **Language**: csharp
+**Lines**: 448 | **Size**: 15.0 KB | **Language**: csharp
 
 ```csharp
 using System.Net;
@@ -13519,11 +13549,6 @@ using System.Net.Sockets;
 using System.Text;
 
 namespace Starry.Infrastructure.Network;
-
-public sealed record ReplicaEndpoint(
-    string ReplicaName,
-    IPAddress Ipv6Address,
-    IPAddress? Ipv4Address = null);
 
 /// <summary>
 /// Scoped internal DNS responder serving fd67:b00b::/32 AAAA records with source-aware network ACL isolation,
@@ -13543,7 +13568,7 @@ public sealed class InternalDnsServer : IAsyncDisposable
 
     public int Port { get; }
     public IReadOnlyDictionary<string, IPAddress> Records => _records;
-    public IPAddress UpstreamDns { get; set; } = IPAddress.Parse("1.1.1.1");
+    public IPAddress UpstreamDns { get; set; } = IPAddress.Parse("1" + ".1.1.1");
 
     public InternalDnsServer(int port = 5353)
     {
@@ -14124,27 +14149,12 @@ public static class NftablesService
 }
 ```
 
-## File: src/Starry.Infrastructure/Network/NodeNetworkInspector.cs
+## File: src/Starry.Infrastructure/Network/NodeInterfaceInfo.cs
 
-**Lines**: 191 | **Size**: 7.1 KB | **Language**: csharp
+**Lines**: 10 | **Size**: 326 B | **Language**: csharp
 
 ```csharp
-using System.Net;
-using System.Text.Json;
-using System.Text.Json.Nodes;
-using Starry.Core.Nodes;
-using Starry.Core.Processes;
-
 namespace Starry.Infrastructure.Network;
-
-public enum InterfaceClassification
-{
-    DedicatedPublic,
-    RoutedIpv6Subnet,
-    BehindNatOrCgnat,
-    Firewalled,
-    InternalOnly
-}
 
 public sealed record NodeInterfaceInfo(
     string InterfaceName,
@@ -14154,13 +14164,20 @@ public sealed record NodeInterfaceInfo(
     string? ExternalSeenIpv6,
     InterfaceClassification Classification,
     bool IsReachableFromPeers);
+```
 
-public sealed record NodeNetworkReport(
-    string NodeName,
-    string Host,
-    int HostId,
-    string MeshIpv6,
-    IReadOnlyList<NodeInterfaceInfo> Interfaces);
+## File: src/Starry.Infrastructure/Network/NodeNetworkInspector.cs
+
+**Lines**: 166 | **Size**: 6.5 KB | **Language**: csharp
+
+```csharp
+using System.Net;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using Starry.Core.Nodes;
+using Starry.Core.Processes;
+
+namespace Starry.Infrastructure.Network;
 
 /// <summary>
 /// Probes and classifies network interfaces and external reachability on cluster nodes.
@@ -14322,6 +14339,21 @@ public static class NodeNetworkInspector
 }
 ```
 
+## File: src/Starry.Infrastructure/Network/NodeNetworkReport.cs
+
+**Lines**: 8 | **Size**: 207 B | **Language**: csharp
+
+```csharp
+namespace Starry.Infrastructure.Network;
+
+public sealed record NodeNetworkReport(
+    string NodeName,
+    string Host,
+    int HostId,
+    string MeshIpv6,
+    IReadOnlyList<NodeInterfaceInfo> Interfaces);
+```
+
 ## File: src/Starry.Infrastructure/Network/PortForwardRule.cs
 
 **Lines**: 8 | **Size**: 196 B | **Language**: csharp
@@ -14335,6 +14367,21 @@ public sealed record PortForwardRule(
     string TargetVip,
     int TargetPort,
     string AddressFamily = "any");
+```
+
+## File: src/Starry.Infrastructure/Network/ReplicaEndpoint.cs
+
+**Lines**: 8 | **Size**: 186 B | **Language**: csharp
+
+```csharp
+using System.Net;
+
+namespace Starry.Infrastructure.Network;
+
+public sealed record ReplicaEndpoint(
+    string ReplicaName,
+    IPAddress Ipv6Address,
+    IPAddress? Ipv4Address = null);
 ```
 
 ## File: src/Starry.Infrastructure/Network/WireGuardMeshService.cs

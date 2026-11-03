@@ -26,7 +26,7 @@ public sealed class GitSyncService
                 WorkingDirectory = workingDir
             }, ct).ConfigureAwait(false);
 
-            var commitResult = await _runner.RunAsync(new ProcessSpec
+            await _runner.RunAsync(new ProcessSpec
             {
                 Executable = "git",
                 Arguments = ["commit", "-m", commitMessage],

@@ -6,31 +6,6 @@ using Starry.Core.Processes;
 
 namespace Starry.Infrastructure.Network;
 
-public enum InterfaceClassification
-{
-    DedicatedPublic,
-    RoutedIpv6Subnet,
-    BehindNatOrCgnat,
-    Firewalled,
-    InternalOnly
-}
-
-public sealed record NodeInterfaceInfo(
-    string InterfaceName,
-    IReadOnlyList<string> Ipv4Addresses,
-    IReadOnlyList<string> Ipv6Addresses,
-    string? ExternalSeenIpv4,
-    string? ExternalSeenIpv6,
-    InterfaceClassification Classification,
-    bool IsReachableFromPeers);
-
-public sealed record NodeNetworkReport(
-    string NodeName,
-    string Host,
-    int HostId,
-    string MeshIpv6,
-    IReadOnlyList<NodeInterfaceInfo> Interfaces);
-
 /// <summary>
 /// Probes and classifies network interfaces and external reachability on cluster nodes.
 /// </summary>

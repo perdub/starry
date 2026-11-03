@@ -4,17 +4,6 @@ using System.Text.Json.Nodes;
 
 namespace Starry.Infrastructure.Network;
 
-public sealed record IdLedgerState
-{
-    public int NextHostId { get; set; } = 1;
-    public Dictionary<string, int> AllocatedHosts { get; init; } = new(StringComparer.OrdinalIgnoreCase);
-    public List<int> TombstonedHostIds { get; init; } = [];
-
-    public int NextContainerId { get; set; } = 1;
-    public Dictionary<string, int> AllocatedContainers { get; init; } = new(StringComparer.OrdinalIgnoreCase);
-    public List<int> TombstonedContainerIds { get; init; } = [];
-}
-
 /// <summary>
 /// Persistent ledger for monotonic, non-reusable host and container IDs with tombstoning,
 /// generating canonical fd67:b00b::/32 cluster IPv6 addresses.
@@ -23,7 +12,7 @@ public sealed class IdLedgerService
 {
     public const string ClusterPrefix = "fd67:b00b";
     private readonly string _ledgerFilePath;
-    private readonly object _syncLock = new();
+    private readonly Lock _syncLock = new();
     private IdLedgerState _state;
 
     public IdLedgerService(string? baseDir = null)

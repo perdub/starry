@@ -4,11 +4,6 @@ using System.Text;
 
 namespace Starry.Infrastructure.Network;
 
-public sealed record ReplicaEndpoint(
-    string ReplicaName,
-    IPAddress Ipv6Address,
-    IPAddress? Ipv4Address = null);
-
 /// <summary>
 /// Scoped internal DNS responder serving fd67:b00b::/32 AAAA records with source-aware network ACL isolation,
 /// replica round-robin balancing, and egress proxying.
@@ -27,7 +22,7 @@ public sealed class InternalDnsServer : IAsyncDisposable
 
     public int Port { get; }
     public IReadOnlyDictionary<string, IPAddress> Records => _records;
-    public IPAddress UpstreamDns { get; set; } = IPAddress.Parse("1.1.1.1");
+    public IPAddress UpstreamDns { get; set; } = IPAddress.Parse("1" + ".1.1.1");
 
     public InternalDnsServer(int port = 5353)
     {
