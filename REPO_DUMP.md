@@ -3,8 +3,8 @@
 ## Overview
 
 - **Total Files**: 160
-- **Total Lines of Code**: 22231
-- **Total Size**: 842.1 KB
+- **Total Lines of Code**: 22234
+- **Total Size**: 842.4 KB
 - **Root Directory**: `/root/src/starry`
 
 ## Repository Structure
@@ -763,7 +763,7 @@ Licensed under the [MIT License](LICENSE).
 
 ## File: .github/workflows/ci-full-matrix.yml
 
-**Lines**: 124 | **Size**: 4.1 KB | **Language**: yaml
+**Lines**: 127 | **Size**: 4.3 KB | **Language**: yaml
 
 ```yaml
 name: Full Multi-Distro Matrix & Chaos CI
@@ -812,11 +812,14 @@ jobs:
       - name: Verify Native AOT Publish (linux-x64)
         run: dotnet publish src/Starry.Cli/Starry.Cli.csproj -r linux-x64 -c Release -p:PublishAotEnabled=true -o publish-aot
 
+      - name: Verify Framework-Dependent Standalone Publish (linux-x64 for older glibc)
+        run: dotnet publish src/Starry.Cli/Starry.Cli.csproj -r linux-x64 -c Release -p:PublishSingleFile=true --self-contained true -o publish-standalone
+
       - name: Upload Native Binary
         uses: actions/upload-artifact@v4
         with:
           name: starry-linux-x64
-          path: publish-aot/starry
+          path: publish-standalone/starry
 
   distro-matrix:
     needs: build-and-test

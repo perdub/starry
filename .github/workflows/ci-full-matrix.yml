@@ -44,11 +44,14 @@ jobs:
       - name: Verify Native AOT Publish (linux-x64)
         run: dotnet publish src/Starry.Cli/Starry.Cli.csproj -r linux-x64 -c Release -p:PublishAotEnabled=true -o publish-aot
 
+      - name: Verify Framework-Dependent Standalone Publish (linux-x64 for older glibc)
+        run: dotnet publish src/Starry.Cli/Starry.Cli.csproj -r linux-x64 -c Release -p:PublishSingleFile=true --self-contained true -o publish-standalone
+
       - name: Upload Native Binary
         uses: actions/upload-artifact@v4
         with:
           name: starry-linux-x64
-          path: publish-aot/starry
+          path: publish-standalone/starry
 
   distro-matrix:
     needs: build-and-test
