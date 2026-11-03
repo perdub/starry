@@ -12997,11 +12997,11 @@ public abstract class BaseSocketContainerRuntime : IContainerRuntime
     {
         if (string.IsNullOrWhiteSpace(memLimit)) return null;
         var trimmed = memLimit.Trim();
-        if (trimmed.EndsWith("g", StringComparison.OrdinalIgnoreCase) && long.TryParse(trimmed[..^1], CultureInfo.InvariantCulture, out var g))
+        if ((trimmed.EndsWith('g') || trimmed.EndsWith('G')) && long.TryParse(trimmed[..^1], CultureInfo.InvariantCulture, out var g))
             return g * 1024 * 1024 * 1024;
-        if (trimmed.EndsWith("m", StringComparison.OrdinalIgnoreCase) && long.TryParse(trimmed[..^1], CultureInfo.InvariantCulture, out var m))
+        if ((trimmed.EndsWith('m') || trimmed.EndsWith('M')) && long.TryParse(trimmed[..^1], CultureInfo.InvariantCulture, out var m))
             return m * 1024 * 1024;
-        if (trimmed.EndsWith("k", StringComparison.OrdinalIgnoreCase) && long.TryParse(trimmed[..^1], CultureInfo.InvariantCulture, out var k))
+        if ((trimmed.EndsWith('k') || trimmed.EndsWith('K')) && long.TryParse(trimmed[..^1], CultureInfo.InvariantCulture, out var k))
             return k * 1024;
         if (long.TryParse(trimmed, CultureInfo.InvariantCulture, out var b))
             return b;
