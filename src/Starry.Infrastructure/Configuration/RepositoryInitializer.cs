@@ -17,6 +17,15 @@ public static class RepositoryInitializer
             ? Path.Combine(root, projectName)
             : root;
 
+        CreateDirectories(targetDir);
+        WriteDefaultConfigs(targetDir, projectName);
+
+        var masterKey = CryptoService.GenerateMasterKeyBase64();
+        return (masterKey, targetDir);
+    }
+
+    private static void CreateDirectories(string targetDir)
+    {
         Directory.CreateDirectory(targetDir);
         Directory.CreateDirectory(Path.Combine(targetDir, "nodes"));
         Directory.CreateDirectory(Path.Combine(targetDir, "services"));
@@ -26,7 +35,10 @@ public static class RepositoryInitializer
         File.WriteAllText(Path.Combine(targetDir, "nodes", ".gitkeep"), string.Empty);
         File.WriteAllText(Path.Combine(targetDir, "services", ".gitkeep"), string.Empty);
         File.WriteAllText(Path.Combine(targetDir, "files", ".gitkeep"), string.Empty);
+    }
 
+    private static void WriteDefaultConfigs(string targetDir, string? projectName)
+    {
         var gitignorePath = Path.Combine(targetDir, ".gitignore");
         if (!File.Exists(gitignorePath))
         {
@@ -57,22 +69,13 @@ public static class RepositoryInitializer
         var portsPath = Path.Combine(targetDir, "ports.yaml");
         if (!File.Exists(portsPath))
         {
-            const string portsContent = """
-                ports: {}
-                """;
-            File.WriteAllText(portsPath, portsContent);
+            File.WriteAllText(portsPath, "ports: {}\n");
         }
 
         var volumesPath = Path.Combine(targetDir, "volumes.yaml");
         if (!File.Exists(volumesPath))
         {
-            const string volumesContent = """
-                volumes: {}
-                """;
-            File.WriteAllText(volumesPath, volumesContent);
+            File.WriteAllText(volumesPath, "volumes: {}\n");
         }
-
-        var masterKey = CryptoService.GenerateMasterKeyBase64();
-        return (masterKey, targetDir);
     }
 }

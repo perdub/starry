@@ -3,8 +3,8 @@
 ## Overview
 
 - **Total Files**: 157
-- **Total Lines of Code**: 21031
-- **Total Size**: 797.2 KB
+- **Total Lines of Code**: 21085
+- **Total Size**: 798.1 KB
 - **Root Directory**: `/root/src/starry`
 
 ## Repository Structure
@@ -11488,7 +11488,7 @@ public sealed class GitSyncService
 
             return pullResult.IsSuccess && pushResult.IsSuccess;
         }
-        catch
+        catch (Exception ex) when (ex is InvalidOperationException or TimeoutException or IOException)
         {
             return false;
         }
@@ -11544,7 +11544,7 @@ public sealed class JsonConfigFormatProvider : IConfigFormatProvider
 
 ## File: src/Starry.Infrastructure/Configuration/RepositoryInitializer.cs
 
-**Lines**: 78 | **Size**: 2.8 KB | **Language**: csharp
+**Lines**: 81 | **Size**: 2.9 KB | **Language**: csharp
 
 ```csharp
 using Starry.Infrastructure.Security;
@@ -11566,6 +11566,15 @@ public static class RepositoryInitializer
             ? Path.Combine(root, projectName)
             : root;
 
+        CreateDirectories(targetDir);
+        WriteDefaultConfigs(targetDir, projectName);
+
+        var masterKey = CryptoService.GenerateMasterKeyBase64();
+        return (masterKey, targetDir);
+    }
+
+    private static void CreateDirectories(string targetDir)
+    {
         Directory.CreateDirectory(targetDir);
         Directory.CreateDirectory(Path.Combine(targetDir, "nodes"));
         Directory.CreateDirectory(Path.Combine(targetDir, "services"));
@@ -11575,7 +11584,10 @@ public static class RepositoryInitializer
         File.WriteAllText(Path.Combine(targetDir, "nodes", ".gitkeep"), string.Empty);
         File.WriteAllText(Path.Combine(targetDir, "services", ".gitkeep"), string.Empty);
         File.WriteAllText(Path.Combine(targetDir, "files", ".gitkeep"), string.Empty);
+    }
 
+    private static void WriteDefaultConfigs(string targetDir, string? projectName)
+    {
         var gitignorePath = Path.Combine(targetDir, ".gitignore");
         if (!File.Exists(gitignorePath))
         {
@@ -11606,23 +11618,14 @@ public static class RepositoryInitializer
         var portsPath = Path.Combine(targetDir, "ports.yaml");
         if (!File.Exists(portsPath))
         {
-            const string portsContent = """
-                ports: {}
-                """;
-            File.WriteAllText(portsPath, portsContent);
+            File.WriteAllText(portsPath, "ports: {}\n");
         }
 
         var volumesPath = Path.Combine(targetDir, "volumes.yaml");
         if (!File.Exists(volumesPath))
         {
-            const string volumesContent = """
-                volumes: {}
-                """;
-            File.WriteAllText(volumesPath, volumesContent);
+            File.WriteAllText(volumesPath, "volumes: {}\n");
         }
-
-        var masterKey = CryptoService.GenerateMasterKeyBase64();
-        return (masterKey, targetDir);
     }
 }
 ```
@@ -13301,7 +13304,7 @@ public sealed class Localizer : ILocalizer
 
 ## File: src/Starry.Infrastructure/Network/IdLedgerService.cs
 
-**Lines**: 197 | **Size**: 6.2 KB | **Language**: csharp
+**Lines**: 201 | **Size**: 6.4 KB | **Language**: csharp
 
 ```csharp
 using System.Globalization;
@@ -13317,9 +13320,10 @@ namespace Starry.Infrastructure.Network;
 public sealed class IdLedgerService
 {
     public const string ClusterPrefix = "fd67:b00b";
+    private static readonly JsonSerializerOptions IndentedJsonOptions = new() { WriteIndented = true };
     private readonly string _ledgerFilePath;
     private readonly Lock _syncLock = new();
-    private IdLedgerState _state;
+    private readonly IdLedgerState _state;
 
     public IdLedgerService(string? baseDir = null)
     {
@@ -13454,19 +13458,22 @@ public sealed class IdLedgerService
     public static string FormatIngressIp(int hostId) =>
         $"{ClusterPrefix}:{hostId:x4}:ffff::1";
 
-    public IdLedgerState GetStateSnapshot()
+    public IdLedgerState StateSnapshot
     {
-        lock (_syncLock)
+        get
         {
-            return new IdLedgerState
+            lock (_syncLock)
             {
-                NextHostId = _state.NextHostId,
-                AllocatedHosts = new Dictionary<string, int>(_state.AllocatedHosts, StringComparer.OrdinalIgnoreCase),
-                TombstonedHostIds = [.. _state.TombstonedHostIds],
-                NextContainerId = _state.NextContainerId,
-                AllocatedContainers = new Dictionary<string, int>(_state.AllocatedContainers, StringComparer.OrdinalIgnoreCase),
-                TombstonedContainerIds = [.. _state.TombstonedContainerIds]
-            };
+                return new IdLedgerState
+                {
+                    NextHostId = _state.NextHostId,
+                    AllocatedHosts = new Dictionary<string, int>(_state.AllocatedHosts, StringComparer.OrdinalIgnoreCase),
+                    TombstonedHostIds = [.. _state.TombstonedHostIds],
+                    NextContainerId = _state.NextContainerId,
+                    AllocatedContainers = new Dictionary<string, int>(_state.AllocatedContainers, StringComparer.OrdinalIgnoreCase),
+                    TombstonedContainerIds = [.. _state.TombstonedContainerIds]
+                };
+            }
         }
     }
 
@@ -13483,7 +13490,7 @@ public sealed class IdLedgerService
             var loaded = JsonSerializer.Deserialize<IdLedgerState>(json);
             return loaded ?? new IdLedgerState();
         }
-        catch
+        catch (Exception ex) when (ex is IOException or JsonException)
         {
             return new IdLedgerState();
         }
@@ -13497,7 +13504,7 @@ public sealed class IdLedgerService
             Directory.CreateDirectory(dir);
         }
 
-        var json = JsonSerializer.Serialize(_state, new JsonSerializerOptions { WriteIndented = true });
+        var json = JsonSerializer.Serialize(_state, IndentedJsonOptions);
         File.WriteAllText(_ledgerFilePath, json);
     }
 }
@@ -13541,7 +13548,7 @@ public enum InterfaceClassification
 
 ## File: src/Starry.Infrastructure/Network/InternalDnsServer.cs
 
-**Lines**: 448 | **Size**: 15.0 KB | **Language**: csharp
+**Lines**: 483 | **Size**: 15.7 KB | **Language**: csharp
 
 ```csharp
 using System.Net;
@@ -13684,8 +13691,8 @@ public sealed class InternalDnsServer : IAsyncDisposable
         }
 
         var cleanDomain = NormalizeDomain(domain);
-        var baseServiceName = cleanDomain.EndsWith(".internal", StringComparison.OrdinalIgnoreCase)
-            ? cleanDomain[..^".internal".Length]
+        var baseServiceName = cleanDomain.EndsWith(".INTERNAL", StringComparison.OrdinalIgnoreCase)
+            ? cleanDomain[..^".INTERNAL".Length]
             : cleanDomain;
 
         // Check if query is for internal cluster service
@@ -13696,47 +13703,12 @@ public sealed class InternalDnsServer : IAsyncDisposable
 
         if (hasEndpoints || hasDirect)
         {
-            // Verify Network Isolation ACL
-            if (clientAddress != null && !IsAccessAllowed(clientAddress, baseServiceName))
-            {
-                return BuildNxDomainResponse(queryBuffer);
-            }
-
-            if (qtype == 28) // AAAA record (IPv6)
-            {
-                var ipv6List = endpoints != null
-                    ? endpoints.Select(e => e.Ipv6Address).Where(ip => ip.AddressFamily == AddressFamily.InterNetworkV6).ToList()
-                    : directIp != null && directIp.AddressFamily == AddressFamily.InterNetworkV6 ? [directIp] : [];
-
-                if (ipv6List.Count > 0)
-                {
-                    return BuildAaaaResponse(queryBuffer, ipv6List);
-                }
-
-                return BuildEmptyNoErrorResponse(queryBuffer);
-            }
-
-            if (qtype == 1) // A record (IPv4)
-            {
-                var ipv4List = endpoints != null
-                    ? endpoints.Select(e => e.Ipv4Address).Where(ip => ip != null && ip.AddressFamily == AddressFamily.InterNetwork).Select(ip => ip!).ToList()
-                    : directIp != null && directIp.AddressFamily == AddressFamily.InterNetwork ? [directIp] : [];
-
-                if (ipv4List.Count > 0)
-                {
-                    return BuildDnsResponse(queryBuffer, ipv4List[0]);
-                }
-
-                // Return NOERROR with 0 answers so dual-stack resolution never hangs
-                return BuildEmptyNoErrorResponse(queryBuffer);
-            }
-
-            return BuildEmptyNoErrorResponse(queryBuffer);
+            return HandleInternalQuery(queryBuffer, qtype, endpoints, directIp, clientAddress, baseServiceName);
         }
 
         // Domain is not internal service
-        if (cleanDomain.EndsWith(".internal", StringComparison.OrdinalIgnoreCase) ||
-            cleanDomain.EndsWith(".local", StringComparison.OrdinalIgnoreCase))
+        if (cleanDomain.EndsWith(".INTERNAL", StringComparison.OrdinalIgnoreCase) ||
+            cleanDomain.EndsWith(".LOCAL", StringComparison.OrdinalIgnoreCase))
         {
             return BuildNxDomainResponse(queryBuffer);
         }
@@ -13754,6 +13726,70 @@ public sealed class InternalDnsServer : IAsyncDisposable
         }
 
         return await ForwardToUpstreamAsync(queryBuffer, ct).ConfigureAwait(false);
+    }
+
+    private byte[]? HandleInternalQuery(
+        byte[] queryBuffer,
+        ushort qtype,
+        List<ReplicaEndpoint>? endpoints,
+        IPAddress? directIp,
+        IPAddress? clientAddress,
+        string baseServiceName)
+    {
+        if (clientAddress != null && !IsAccessAllowed(clientAddress, baseServiceName))
+        {
+            return BuildNxDomainResponse(queryBuffer);
+        }
+
+        if (qtype == 28) // AAAA
+        {
+            List<IPAddress> ipv6List;
+            if (endpoints != null)
+            {
+                ipv6List = endpoints.Select(e => e.Ipv6Address).Where(ip => ip.AddressFamily == AddressFamily.InterNetworkV6).ToList();
+            }
+            else if (directIp != null && directIp.AddressFamily == AddressFamily.InterNetworkV6)
+            {
+                ipv6List = [directIp];
+            }
+            else
+            {
+                ipv6List = [];
+            }
+
+            if (ipv6List.Count > 0)
+            {
+                return BuildAaaaResponse(queryBuffer, ipv6List);
+            }
+
+            return BuildEmptyNoErrorResponse(queryBuffer);
+        }
+
+        if (qtype == 1) // A
+        {
+            List<IPAddress> ipv4List;
+            if (endpoints != null)
+            {
+                ipv4List = endpoints.Select(e => e.Ipv4Address).Where(ip => ip != null && ip.AddressFamily == AddressFamily.InterNetwork).Select(ip => ip!).ToList();
+            }
+            else if (directIp != null && directIp.AddressFamily == AddressFamily.InterNetwork)
+            {
+                ipv4List = [directIp];
+            }
+            else
+            {
+                ipv4List = [];
+            }
+
+            if (ipv4List.Count > 0)
+            {
+                return BuildDnsResponse(queryBuffer, ipv4List[0]);
+            }
+
+            return BuildEmptyNoErrorResponse(queryBuffer);
+        }
+
+        return BuildEmptyNoErrorResponse(queryBuffer);
     }
 
     private bool IsAccessAllowed(IPAddress clientAddress, string targetService)
@@ -13809,7 +13845,7 @@ public sealed class InternalDnsServer : IAsyncDisposable
     }
 
     private static string NormalizeDomain(string domain) =>
-        domain.Trim().TrimEnd('.').ToLowerInvariant();
+        domain.Trim().TrimEnd('.').ToUpperInvariant();
 
     private async Task<byte[]?> ForwardToUpstreamAsync(byte[] queryBuffer, CancellationToken ct)
     {
@@ -13825,7 +13861,7 @@ public sealed class InternalDnsServer : IAsyncDisposable
             var result = await upstreamClient.ReceiveAsync(linkedCts.Token).ConfigureAwait(false);
             return result.Buffer;
         }
-        catch
+        catch (Exception ex) when (ex is SocketException or OperationCanceledException or IOException)
         {
             return null;
         }
@@ -13930,7 +13966,7 @@ public sealed class InternalDnsServer : IAsyncDisposable
         return response;
     }
 
-    private static byte[] BuildAaaaResponse(byte[] queryBuffer, IReadOnlyList<IPAddress> ipv6Addresses)
+    private static byte[] BuildAaaaResponse(byte[] queryBuffer, List<IPAddress> ipv6Addresses)
     {
         var count = ipv6Addresses.Count;
         var response = new byte[queryBuffer.Length + (count * 28)];
@@ -13985,8 +14021,14 @@ public sealed class InternalDnsServer : IAsyncDisposable
             {
                 await _listenerTask.ConfigureAwait(false);
             }
-            catch (OperationCanceledException) { }
-            catch (SocketException) { }
+            catch (OperationCanceledException)
+            {
+                // Expected on cancellation
+            }
+            catch (SocketException)
+            {
+                // Expected on socket close
+            }
         }
 
         _cts?.Dispose();
@@ -14168,7 +14210,7 @@ public sealed record NodeInterfaceInfo(
 
 ## File: src/Starry.Infrastructure/Network/NodeNetworkInspector.cs
 
-**Lines**: 166 | **Size**: 6.5 KB | **Language**: csharp
+**Lines**: 178 | **Size**: 6.4 KB | **Language**: csharp
 
 ```csharp
 using System.Net;
@@ -14224,57 +14266,22 @@ public static class NodeNetworkInspector
         {
             try
             {
-                var jsonNode = JsonNode.Parse(ipResult.StandardOutput) as JsonArray;
-                if (jsonNode != null)
+                if (JsonNode.Parse(ipResult.StandardOutput) is JsonArray jsonNode)
                 {
                     foreach (var item in jsonNode)
                     {
-                        if (item is not JsonObject ifaceObj) continue;
-
-                        var ifname = ifaceObj["ifname"]?.ToString() ?? "unknown";
-                        if (ifname.Equals("lo", StringComparison.OrdinalIgnoreCase)) continue;
-
-                        var v4List = new List<string>();
-                        var v6List = new List<string>();
-
-                        if (ifaceObj["addr_info"] is JsonArray addrs)
+                        if (item is JsonObject ifaceObj)
                         {
-                            foreach (var a in addrs)
+                            var info = ParseInterfaceInfo(ifaceObj, extIpv4, extIpv6);
+                            if (info != null)
                             {
-                                var family = a?["family"]?.ToString();
-                                var local = a?["local"]?.ToString();
-                                var prefixlen = a?["prefixlen"]?.ToString();
-
-                                if (string.IsNullOrEmpty(local)) continue;
-
-                                var withPrefix = !string.IsNullOrEmpty(prefixlen) ? $"{local}/{prefixlen}" : local;
-
-                                if (string.Equals(family, "inet", StringComparison.OrdinalIgnoreCase))
-                                {
-                                    v4List.Add(withPrefix);
-                                }
-                                else if (string.Equals(family, "inet6", StringComparison.OrdinalIgnoreCase) &&
-                                         !local.StartsWith("fe80", StringComparison.OrdinalIgnoreCase))
-                                {
-                                    v6List.Add(withPrefix);
-                                }
+                                interfaces.Add(info);
                             }
                         }
-
-                        var classification = ClassifyInterface(v4List, v6List, extIpv4, extIpv6);
-
-                        interfaces.Add(new NodeInterfaceInfo(
-                            InterfaceName: ifname,
-                            Ipv4Addresses: v4List,
-                            Ipv6Addresses: v6List,
-                            ExternalSeenIpv4: extIpv4,
-                            ExternalSeenIpv6: extIpv6,
-                            Classification: classification,
-                            IsReachableFromPeers: classification == InterfaceClassification.DedicatedPublic));
                     }
                 }
             }
-            catch
+            catch (JsonException)
             {
                 // Fallback to basic interface
             }
@@ -14294,6 +14301,53 @@ public static class NodeNetworkInspector
 
         var meshIp = IdLedgerService.FormatHostWireGuardIp(hostId);
         return new NodeNetworkReport(node.NodeName, node.Host, hostId, meshIp, interfaces);
+    }
+
+    private static NodeInterfaceInfo? ParseInterfaceInfo(JsonObject ifaceObj, string? extIpv4, string? extIpv6)
+    {
+        var ifname = ifaceObj["ifname"]?.ToString() ?? "unknown";
+        if (ifname.Equals("lo", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var v4List = new List<string>();
+        var v6List = new List<string>();
+
+        if (ifaceObj["addr_info"] is JsonArray addrs)
+        {
+            foreach (var a in addrs)
+            {
+                var family = a?["family"]?.ToString();
+                var local = a?["local"]?.ToString();
+                var prefixlen = a?["prefixlen"]?.ToString();
+
+                if (string.IsNullOrEmpty(local)) continue;
+
+                var withPrefix = !string.IsNullOrEmpty(prefixlen) ? $"{local}/{prefixlen}" : local;
+
+                if (string.Equals(family, "inet", StringComparison.OrdinalIgnoreCase))
+                {
+                    v4List.Add(withPrefix);
+                }
+                else if (string.Equals(family, "inet6", StringComparison.OrdinalIgnoreCase) &&
+                         !local.StartsWith("fe80", StringComparison.OrdinalIgnoreCase))
+                {
+                    v6List.Add(withPrefix);
+                }
+            }
+        }
+
+        var classification = ClassifyInterface(v4List, v6List, extIpv4, extIpv6);
+
+        return new NodeInterfaceInfo(
+            InterfaceName: ifname,
+            Ipv4Addresses: v4List,
+            Ipv6Addresses: v6List,
+            ExternalSeenIpv4: extIpv4,
+            ExternalSeenIpv6: extIpv6,
+            Classification: classification,
+            IsReachableFromPeers: classification == InterfaceClassification.DedicatedPublic);
     }
 
     private static InterfaceClassification ClassifyInterface(
@@ -21249,7 +21303,7 @@ public class IdLedgerServiceTests
             var id3 = ledger.AllocateHostId("singapore");
             Assert.Equal(3, id3);
 
-            var snapshot = ledger.GetStateSnapshot();
+            var snapshot = ledger.StateSnapshot;
             Assert.Contains(1, snapshot.TombstonedHostIds);
             Assert.DoesNotContain(1, snapshot.AllocatedHosts.Values);
         }
@@ -21276,7 +21330,7 @@ public class IdLedgerServiceTests
             var c3 = ledger.AllocateContainerId("shop#3");
             Assert.Equal(3, c3);
 
-            var snapshot = ledger.GetStateSnapshot();
+            var snapshot = ledger.StateSnapshot;
             Assert.Contains(1, snapshot.TombstonedContainerIds);
         }
         finally

@@ -50,7 +50,7 @@ public class IdLedgerServiceTests
             var id3 = ledger.AllocateHostId("singapore");
             Assert.Equal(3, id3);
 
-            var snapshot = ledger.GetStateSnapshot();
+            var snapshot = ledger.StateSnapshot;
             Assert.Contains(1, snapshot.TombstonedHostIds);
             Assert.DoesNotContain(1, snapshot.AllocatedHosts.Values);
         }
@@ -77,7 +77,7 @@ public class IdLedgerServiceTests
             var c3 = ledger.AllocateContainerId("shop#3");
             Assert.Equal(3, c3);
 
-            var snapshot = ledger.GetStateSnapshot();
+            var snapshot = ledger.StateSnapshot;
             Assert.Contains(1, snapshot.TombstonedContainerIds);
         }
         finally

@@ -11,9 +11,10 @@ namespace Starry.Infrastructure.Network;
 public sealed class IdLedgerService
 {
     public const string ClusterPrefix = "fd67:b00b";
+    private static readonly JsonSerializerOptions IndentedJsonOptions = new() { WriteIndented = true };
     private readonly string _ledgerFilePath;
     private readonly Lock _syncLock = new();
-    private IdLedgerState _state;
+    private readonly IdLedgerState _state;
 
     public IdLedgerService(string? baseDir = null)
     {
@@ -148,19 +149,22 @@ public sealed class IdLedgerService
     public static string FormatIngressIp(int hostId) =>
         $"{ClusterPrefix}:{hostId:x4}:ffff::1";
 
-    public IdLedgerState GetStateSnapshot()
+    public IdLedgerState StateSnapshot
     {
-        lock (_syncLock)
+        get
         {
-            return new IdLedgerState
+            lock (_syncLock)
             {
-                NextHostId = _state.NextHostId,
-                AllocatedHosts = new Dictionary<string, int>(_state.AllocatedHosts, StringComparer.OrdinalIgnoreCase),
-                TombstonedHostIds = [.. _state.TombstonedHostIds],
-                NextContainerId = _state.NextContainerId,
-                AllocatedContainers = new Dictionary<string, int>(_state.AllocatedContainers, StringComparer.OrdinalIgnoreCase),
-                TombstonedContainerIds = [.. _state.TombstonedContainerIds]
-            };
+                return new IdLedgerState
+                {
+                    NextHostId = _state.NextHostId,
+                    AllocatedHosts = new Dictionary<string, int>(_state.AllocatedHosts, StringComparer.OrdinalIgnoreCase),
+                    TombstonedHostIds = [.. _state.TombstonedHostIds],
+                    NextContainerId = _state.NextContainerId,
+                    AllocatedContainers = new Dictionary<string, int>(_state.AllocatedContainers, StringComparer.OrdinalIgnoreCase),
+                    TombstonedContainerIds = [.. _state.TombstonedContainerIds]
+                };
+            }
         }
     }
 
@@ -177,7 +181,7 @@ public sealed class IdLedgerService
             var loaded = JsonSerializer.Deserialize<IdLedgerState>(json);
             return loaded ?? new IdLedgerState();
         }
-        catch
+        catch (Exception ex) when (ex is IOException or JsonException)
         {
             return new IdLedgerState();
         }
@@ -191,7 +195,7 @@ public sealed class IdLedgerService
             Directory.CreateDirectory(dir);
         }
 
-        var json = JsonSerializer.Serialize(_state, new JsonSerializerOptions { WriteIndented = true });
+        var json = JsonSerializer.Serialize(_state, IndentedJsonOptions);
         File.WriteAllText(_ledgerFilePath, json);
     }
 }

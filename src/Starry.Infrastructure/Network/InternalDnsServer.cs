@@ -138,8 +138,8 @@ public sealed class InternalDnsServer : IAsyncDisposable
         }
 
         var cleanDomain = NormalizeDomain(domain);
-        var baseServiceName = cleanDomain.EndsWith(".internal", StringComparison.OrdinalIgnoreCase)
-            ? cleanDomain[..^".internal".Length]
+        var baseServiceName = cleanDomain.EndsWith(".INTERNAL", StringComparison.OrdinalIgnoreCase)
+            ? cleanDomain[..^".INTERNAL".Length]
             : cleanDomain;
 
         // Check if query is for internal cluster service
@@ -150,47 +150,12 @@ public sealed class InternalDnsServer : IAsyncDisposable
 
         if (hasEndpoints || hasDirect)
         {
-            // Verify Network Isolation ACL
-            if (clientAddress != null && !IsAccessAllowed(clientAddress, baseServiceName))
-            {
-                return BuildNxDomainResponse(queryBuffer);
-            }
-
-            if (qtype == 28) // AAAA record (IPv6)
-            {
-                var ipv6List = endpoints != null
-                    ? endpoints.Select(e => e.Ipv6Address).Where(ip => ip.AddressFamily == AddressFamily.InterNetworkV6).ToList()
-                    : directIp != null && directIp.AddressFamily == AddressFamily.InterNetworkV6 ? [directIp] : [];
-
-                if (ipv6List.Count > 0)
-                {
-                    return BuildAaaaResponse(queryBuffer, ipv6List);
-                }
-
-                return BuildEmptyNoErrorResponse(queryBuffer);
-            }
-
-            if (qtype == 1) // A record (IPv4)
-            {
-                var ipv4List = endpoints != null
-                    ? endpoints.Select(e => e.Ipv4Address).Where(ip => ip != null && ip.AddressFamily == AddressFamily.InterNetwork).Select(ip => ip!).ToList()
-                    : directIp != null && directIp.AddressFamily == AddressFamily.InterNetwork ? [directIp] : [];
-
-                if (ipv4List.Count > 0)
-                {
-                    return BuildDnsResponse(queryBuffer, ipv4List[0]);
-                }
-
-                // Return NOERROR with 0 answers so dual-stack resolution never hangs
-                return BuildEmptyNoErrorResponse(queryBuffer);
-            }
-
-            return BuildEmptyNoErrorResponse(queryBuffer);
+            return HandleInternalQuery(queryBuffer, qtype, endpoints, directIp, clientAddress, baseServiceName);
         }
 
         // Domain is not internal service
-        if (cleanDomain.EndsWith(".internal", StringComparison.OrdinalIgnoreCase) ||
-            cleanDomain.EndsWith(".local", StringComparison.OrdinalIgnoreCase))
+        if (cleanDomain.EndsWith(".INTERNAL", StringComparison.OrdinalIgnoreCase) ||
+            cleanDomain.EndsWith(".LOCAL", StringComparison.OrdinalIgnoreCase))
         {
             return BuildNxDomainResponse(queryBuffer);
         }
@@ -208,6 +173,70 @@ public sealed class InternalDnsServer : IAsyncDisposable
         }
 
         return await ForwardToUpstreamAsync(queryBuffer, ct).ConfigureAwait(false);
+    }
+
+    private byte[]? HandleInternalQuery(
+        byte[] queryBuffer,
+        ushort qtype,
+        List<ReplicaEndpoint>? endpoints,
+        IPAddress? directIp,
+        IPAddress? clientAddress,
+        string baseServiceName)
+    {
+        if (clientAddress != null && !IsAccessAllowed(clientAddress, baseServiceName))
+        {
+            return BuildNxDomainResponse(queryBuffer);
+        }
+
+        if (qtype == 28) // AAAA
+        {
+            List<IPAddress> ipv6List;
+            if (endpoints != null)
+            {
+                ipv6List = endpoints.Select(e => e.Ipv6Address).Where(ip => ip.AddressFamily == AddressFamily.InterNetworkV6).ToList();
+            }
+            else if (directIp != null && directIp.AddressFamily == AddressFamily.InterNetworkV6)
+            {
+                ipv6List = [directIp];
+            }
+            else
+            {
+                ipv6List = [];
+            }
+
+            if (ipv6List.Count > 0)
+            {
+                return BuildAaaaResponse(queryBuffer, ipv6List);
+            }
+
+            return BuildEmptyNoErrorResponse(queryBuffer);
+        }
+
+        if (qtype == 1) // A
+        {
+            List<IPAddress> ipv4List;
+            if (endpoints != null)
+            {
+                ipv4List = endpoints.Select(e => e.Ipv4Address).Where(ip => ip != null && ip.AddressFamily == AddressFamily.InterNetwork).Select(ip => ip!).ToList();
+            }
+            else if (directIp != null && directIp.AddressFamily == AddressFamily.InterNetwork)
+            {
+                ipv4List = [directIp];
+            }
+            else
+            {
+                ipv4List = [];
+            }
+
+            if (ipv4List.Count > 0)
+            {
+                return BuildDnsResponse(queryBuffer, ipv4List[0]);
+            }
+
+            return BuildEmptyNoErrorResponse(queryBuffer);
+        }
+
+        return BuildEmptyNoErrorResponse(queryBuffer);
     }
 
     private bool IsAccessAllowed(IPAddress clientAddress, string targetService)
@@ -263,7 +292,7 @@ public sealed class InternalDnsServer : IAsyncDisposable
     }
 
     private static string NormalizeDomain(string domain) =>
-        domain.Trim().TrimEnd('.').ToLowerInvariant();
+        domain.Trim().TrimEnd('.').ToUpperInvariant();
 
     private async Task<byte[]?> ForwardToUpstreamAsync(byte[] queryBuffer, CancellationToken ct)
     {
@@ -279,7 +308,7 @@ public sealed class InternalDnsServer : IAsyncDisposable
             var result = await upstreamClient.ReceiveAsync(linkedCts.Token).ConfigureAwait(false);
             return result.Buffer;
         }
-        catch
+        catch (Exception ex) when (ex is SocketException or OperationCanceledException or IOException)
         {
             return null;
         }
@@ -384,7 +413,7 @@ public sealed class InternalDnsServer : IAsyncDisposable
         return response;
     }
 
-    private static byte[] BuildAaaaResponse(byte[] queryBuffer, IReadOnlyList<IPAddress> ipv6Addresses)
+    private static byte[] BuildAaaaResponse(byte[] queryBuffer, List<IPAddress> ipv6Addresses)
     {
         var count = ipv6Addresses.Count;
         var response = new byte[queryBuffer.Length + (count * 28)];
@@ -439,8 +468,14 @@ public sealed class InternalDnsServer : IAsyncDisposable
             {
                 await _listenerTask.ConfigureAwait(false);
             }
-            catch (OperationCanceledException) { }
-            catch (SocketException) { }
+            catch (OperationCanceledException)
+            {
+                // Expected on cancellation
+            }
+            catch (SocketException)
+            {
+                // Expected on socket close
+            }
         }
 
         _cts?.Dispose();

@@ -49,7 +49,7 @@ public sealed class GitSyncService
 
             return pullResult.IsSuccess && pushResult.IsSuccess;
         }
-        catch
+        catch (Exception ex) when (ex is InvalidOperationException or TimeoutException or IOException)
         {
             return false;
         }

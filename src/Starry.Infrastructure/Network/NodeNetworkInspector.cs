@@ -51,57 +51,22 @@ public static class NodeNetworkInspector
         {
             try
             {
-                var jsonNode = JsonNode.Parse(ipResult.StandardOutput) as JsonArray;
-                if (jsonNode != null)
+                if (JsonNode.Parse(ipResult.StandardOutput) is JsonArray jsonNode)
                 {
                     foreach (var item in jsonNode)
                     {
-                        if (item is not JsonObject ifaceObj) continue;
-
-                        var ifname = ifaceObj["ifname"]?.ToString() ?? "unknown";
-                        if (ifname.Equals("lo", StringComparison.OrdinalIgnoreCase)) continue;
-
-                        var v4List = new List<string>();
-                        var v6List = new List<string>();
-
-                        if (ifaceObj["addr_info"] is JsonArray addrs)
+                        if (item is JsonObject ifaceObj)
                         {
-                            foreach (var a in addrs)
+                            var info = ParseInterfaceInfo(ifaceObj, extIpv4, extIpv6);
+                            if (info != null)
                             {
-                                var family = a?["family"]?.ToString();
-                                var local = a?["local"]?.ToString();
-                                var prefixlen = a?["prefixlen"]?.ToString();
-
-                                if (string.IsNullOrEmpty(local)) continue;
-
-                                var withPrefix = !string.IsNullOrEmpty(prefixlen) ? $"{local}/{prefixlen}" : local;
-
-                                if (string.Equals(family, "inet", StringComparison.OrdinalIgnoreCase))
-                                {
-                                    v4List.Add(withPrefix);
-                                }
-                                else if (string.Equals(family, "inet6", StringComparison.OrdinalIgnoreCase) &&
-                                         !local.StartsWith("fe80", StringComparison.OrdinalIgnoreCase))
-                                {
-                                    v6List.Add(withPrefix);
-                                }
+                                interfaces.Add(info);
                             }
                         }
-
-                        var classification = ClassifyInterface(v4List, v6List, extIpv4, extIpv6);
-
-                        interfaces.Add(new NodeInterfaceInfo(
-                            InterfaceName: ifname,
-                            Ipv4Addresses: v4List,
-                            Ipv6Addresses: v6List,
-                            ExternalSeenIpv4: extIpv4,
-                            ExternalSeenIpv6: extIpv6,
-                            Classification: classification,
-                            IsReachableFromPeers: classification == InterfaceClassification.DedicatedPublic));
                     }
                 }
             }
-            catch
+            catch (JsonException)
             {
                 // Fallback to basic interface
             }
@@ -121,6 +86,53 @@ public static class NodeNetworkInspector
 
         var meshIp = IdLedgerService.FormatHostWireGuardIp(hostId);
         return new NodeNetworkReport(node.NodeName, node.Host, hostId, meshIp, interfaces);
+    }
+
+    private static NodeInterfaceInfo? ParseInterfaceInfo(JsonObject ifaceObj, string? extIpv4, string? extIpv6)
+    {
+        var ifname = ifaceObj["ifname"]?.ToString() ?? "unknown";
+        if (ifname.Equals("lo", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var v4List = new List<string>();
+        var v6List = new List<string>();
+
+        if (ifaceObj["addr_info"] is JsonArray addrs)
+        {
+            foreach (var a in addrs)
+            {
+                var family = a?["family"]?.ToString();
+                var local = a?["local"]?.ToString();
+                var prefixlen = a?["prefixlen"]?.ToString();
+
+                if (string.IsNullOrEmpty(local)) continue;
+
+                var withPrefix = !string.IsNullOrEmpty(prefixlen) ? $"{local}/{prefixlen}" : local;
+
+                if (string.Equals(family, "inet", StringComparison.OrdinalIgnoreCase))
+                {
+                    v4List.Add(withPrefix);
+                }
+                else if (string.Equals(family, "inet6", StringComparison.OrdinalIgnoreCase) &&
+                         !local.StartsWith("fe80", StringComparison.OrdinalIgnoreCase))
+                {
+                    v6List.Add(withPrefix);
+                }
+            }
+        }
+
+        var classification = ClassifyInterface(v4List, v6List, extIpv4, extIpv6);
+
+        return new NodeInterfaceInfo(
+            InterfaceName: ifname,
+            Ipv4Addresses: v4List,
+            Ipv6Addresses: v6List,
+            ExternalSeenIpv4: extIpv4,
+            ExternalSeenIpv6: extIpv6,
+            Classification: classification,
+            IsReachableFromPeers: classification == InterfaceClassification.DedicatedPublic);
     }
 
     private static InterfaceClassification ClassifyInterface(
